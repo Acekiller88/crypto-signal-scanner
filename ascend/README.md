@@ -135,3 +135,55 @@ retained — the engine never fabricates market data.
 - `data/ascend-system-status.json` — health, last-scan stats, API telemetry, logs.
 - `data/ascend-performance.json` — current-scan + cumulative label/direction counts
   (setup-confluence only; no win-rate until outcomes are resolved).
+
+## Deployment (make it live) — Cloudflare Pages + GitHub Actions
+
+Two moving parts, both free (no API key, public Bybit data only):
+
+1. **GitHub Actions runs the scan on a schedule** and commits the resulting JSON.
+   The workflow at `.github/workflows/ascend.yml` runs `python -m ascend.main`
+   every hour (plus on push to `main` and manual dispatch), then
+   `python -m ascend.validate_data`, then commits/pushes only when `data/ascend-*`
+   actually changed.
+2. **Cloudflare Pages serves the static dashboard** from the `frontend/` directory,
+   which contains `ascend.html` and `frontend/data/ascend-*.json`.
+
+### One-time setup
+
+**GitHub (the scheduler):**
+1. Push the repo to GitHub and confirm the data files are present:
+   `data/ascend-*.json` and `frontend/data/ascend-*.json` (committed as JSON-in-git,
+   so Pages can serve them).
+2. **Settings → Actions → General → Workflow permissions → Read and write
+   permissions** (the scan workflow commits + pushes JSON). If it's set to
+   read-only, the commit step will fail.
+3. The `ascend.yml` workflow shows up under **Actions**. Trigger it once manually
+   (Run workflow) to confirm it succeeds end-to-end.
+
+**Cloudflare Pages (the host):**
+1. Cloudflare dashboard → **Workers & Pages → Create → Pages → Connect to Git**.
+2. Select the repository and branch `main` (or the branch you want live).
+3. Build settings:
+   - **Framework preset:** None
+   - **Build command:** *(leave empty)*
+   - **Build output directory:** `frontend`
+4. Save and deploy. Your live URL is `https://<project>.pages.dev`.
+
+### How updates flow
+
+Every hour the workflow scans Bybit → overwrites `data/ascend-*.json` +
+`frontend/data/ascend-*.json` → pushes. Cloudflare Pages automatically redeploys
+on each commit, so the dashboard data refreshes itself — no manual step.
+
+### Important notes for ASCEND
+
+- **Bybit must be reachable from the GitHub runner.** GitHub-hosted runners have
+  unrestricted egress, so this works; the *local sandbox* is different (it only
+  allows PyPI), which is why live data is fetched in CI, not locally.
+- **Metadata is analysis-only.** The dashboard and JSON never contain an
+  instruction to trade; they publish a scorecard, probability, entry/stop/target
+  and a managed exit plan.
+- **Verification:** after the first scheduled run, check
+  `data/ascend-system-status.json` for `health == "HEALTHY"` and a non-zero
+  `signalsGenerated` before trusting the dashboard. If a run fails, the previous
+  valid JSON is retained (the engine never fabricates data).
