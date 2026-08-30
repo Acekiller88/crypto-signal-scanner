@@ -59,7 +59,14 @@ def seed_empty_files() -> None:
                                "lastSuccessfulScan": None, "logs": []},
         "market-snapshots.json": [],
         "universe-snapshot.json": {"generatedAt": 0, "rows": []},
+        "notifications.json": {"generatedAt": 0, "events": []},
+        "notifications-pending.json": {"generatedAt": 0, "events": []},
+        "chart-candles.json": {"generatedAt": 0, "symbols": {}},
     }
     for name, payload in defaults.items():
         if not (data_dir() / name).exists():
-            write_data_file(name, payload)
+            if name == "notifications-pending.json":
+                # transient send-queue lives in /data only (not served to the frontend)
+                atomic_write_json(data_dir() / name, payload)
+            else:
+                write_data_file(name, payload)

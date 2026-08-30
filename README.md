@@ -41,6 +41,10 @@ Risk/Reward Validation              ← structure-based SL/TP, RR ≥ 2.5
         ↓
 Signal Generator (WAITING_TRIGGER)  → Outcome Tracker (WIN/LOSS/EXPIRED/AMBIGUOUS/CANCELLED)
         ↓
+Notification Engine                 ← event feed + Telegram/Discord (optional, secret-gated)
+        ↓
+Chart snapshots (15M window/signal) ← data/chart-candles.json (overwritten, no git growth)
+        ↓
 JSON persistence → git commit       ← data/*.json mirrored to frontend/data
         ↓
 Cloudflare Pages (free)             ← static dark dashboard, auto-refresh
@@ -65,6 +69,8 @@ crypto-signal-scanner/
 │   ├── signals.py            LONG/SHORT models, hard rejections, dedupe, signal objects
 │   ├── outcomes.py           chronological lifecycle engine (+1M ambiguity resolution)
 │   ├── performance.py        win rate, profit factor, streaks, breakdowns
+│   ├── notifications.py      event feed + Telegram/Discord sender (secret-gated)
+│   ├── chart.py              bounded 15M candle-window snapshots for the dashboard
 │   ├── validation.py         data-integrity + no-repaint enforcement
 │   ├── persist.py            atomic JSON writes + retention
 │   ├── main.py               scan orchestrator / CLI
@@ -75,7 +81,8 @@ crypto-signal-scanner/
 │   └── data/                 ← mirror of /data served statically by Cloudflare Pages
 ├── config/strategy.json      ALL strategy parameters (nothing hard-coded)
 ├── data/                     signals.json · performance.json · system-status.json · market-snapshots.json
-├── tests/                    103 unit + integration tests (offline, deterministic)
+│                             universe-snapshot.json · notifications.json · chart-candles.json
+├── tests/                    135 unit + integration tests (offline, deterministic)
 ├── .github/workflows/
 │   ├── scanner.yml           cron */15 scan → validate → commit → push
 │   └── tests.yml             pytest on every push/PR
@@ -90,7 +97,7 @@ crypto-signal-scanner/
 git clone <your-repo-url> crypto-signal-scanner
 cd crypto-signal-scanner
 pip install -r requirements.txt      # pytest only; the engine is stdlib-only
-python -m pytest tests/ -q           # 103 tests must pass
+python -m pytest tests/ -q           # 135 tests must pass
 ```
 
 ## 3. Local execution
@@ -137,6 +144,34 @@ Notes:
   futures API mirror → official spot market-data mirror, clearly flagged as a
   degraded source in System Status). See `dataSource.failoverEndpoints` in
   `config/strategy.json`.
+
+### 4.1 Notifications (Telegram / Discord) — optional, zero-cost
+
+The scan derives an **event feed** (`data/notifications.json`) for new high-quality
+signals, TRIGGERED, resolved outcomes and degraded/failed scans. These same events
+are queued in `data/notifications-pending.json` and pushed to **Telegram and/or
+Discord** by the workflow step `python -m scanner.notifications --send`.
+
+- **Channels & events** — configure in `config/strategy.json` → `notifications`
+  (`channels`, `events`, `retention`, `minScoreForNotice`).
+- **Credentials** — add repository secrets (Settings → Secrets → Actions):
+  | Secret | Channel |
+  |---|---|
+  | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Telegram |
+  | `DISCORD_WEBHOOK_URL` | Discord |
+  If a secret is absent the matching channel is skipped; a scan never fails
+  because notifications are missing.
+- **Local test** — `python -m scanner.notifications --dry-run` prints payloads
+  without posting; `--send` drains the queue.
+- **Analysis-only** — messages are descriptive text (symbol, direction, tier,
+  score, trigger/TP/SL/RR). They are **never** instructions to trade.
+
+The dashboard also renders a **mini candlestick chart** on every active signal
+card, built from `data/chart-candles.json` (a bounded 15M candle window plus the
+sweep / CHoCH-BOS / FVG / OB / trigger / SL / TP levels). It is generated with the
+same closed-candle data the signal already came from, so it is causal and never
+repaints. No external chart library is loaded; it is inline SVG so it also works
+in the offline single-file build.
 
 ## 5. Cloudflare Pages deployment (free hosting)
 
@@ -204,6 +239,13 @@ Universe Screener table on the dashboard.
 `frontend/badge.json` — shields.io endpoint badge (last scan time + health).
 `data/performance.json` — headline metrics (the dashboard also recomputes
 metrics client-side for its 7D/30D/90D/ALL filters).
+`data/notifications.json` — bounded event feed (`new_signal` / `triggered` /
+`resolved` / `scan_health` / `scan_failed`) shown on the dashboard and pushed
+to Telegram/Discord when credentials are configured. `data/notifications-pending.json`
+is the unsent queue drained by `python -m scanner.notifications --send`.
+`data/chart-candles.json` — bounded 15M candle window + structure markers per
+active signal, used to draw the mini candlestick chart on each signal card.
+**Overwritten every scan so git does not grow.**
 
 **Immutability:** entry, trigger, SL, TP, RR and generation fields are frozen
 after creation (`scanner/validation.py` enforces this on every scan) — signals
@@ -328,7 +370,7 @@ live behaviour.
 ## 12. Testing
 
 ```bash
-python -m pytest tests/ -v          # 103 tests, fully offline
+python -m pytest tests/ -v          # 135 tests, fully offline
 ```
 
 Coverage: EMA/RSI/ATR/ADX/RelVol/VWAP (hand-computed vectors) · swing

@@ -40,6 +40,8 @@ def build() -> None:
         "snapshots": _read_json(data / "market-snapshots.json", []),
         "screener": _read_json(data / "universe-snapshot.json", {"rows": []}),
         "performance": _read_json(data / "performance.json", None),
+        "notifications": _read_json(data / "notifications.json", {"events": []}),
+        "charts": _read_json(data / "chart-candles.json", {"symbols": {}}),
     }
     # safe for embedding inside a <script> tag
     blob = json.dumps(payload, separators=(",", ":")).replace("<", "\\u003c")

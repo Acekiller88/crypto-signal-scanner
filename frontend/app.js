@@ -44,6 +44,7 @@ const fmtDur = (ms) => {
 
 const state = {
   signals: [], status: null, snapshots: [], performance: null, screener: null,
+  notifications: [], charts: {}, notifKind: "all", notifSearch: "",
   lastDataUpdate: null, embeddedLoaded: false,
   livePrices: {}, liveOk: false, liveAt: null,
   activeFilter: new Set(["A+", "A", "B+"]),
@@ -61,17 +62,21 @@ async function loadJSON(name) {
 
 async function refreshData() {
   try {
-    const [signals, status, snapshots, performance, screener] = await Promise.all([
+    const [signals, status, snapshots, performance, screener, notifications, charts] = await Promise.all([
       loadJSON("signals.json"), loadJSON("system-status.json"),
       loadJSON("market-snapshots.json").catch(() => []),
       loadJSON("performance.json").catch(() => null),
       loadJSON("universe-snapshot.json").catch(() => null),
+      loadJSON("notifications.json").catch(() => ({ events: [] })),
+      loadJSON("chart-candles.json").catch(() => ({ symbols: {} })),
     ]);
     state.signals = Array.isArray(signals?.signals) ? signals.signals : [];
     state.status = status || null;
     state.snapshots = Array.isArray(snapshots) ? snapshots : [];
     state.performance = performance;
     state.screener = screener;
+    state.notifications = Array.isArray(notifications?.events) ? notifications.events : [];
+    state.charts = charts?.symbols || {};
     state.lastDataUpdate = Date.now();
     state.embeddedLoaded = false;
     $("preview-notice").classList.add("hidden");
@@ -86,6 +91,8 @@ async function refreshData() {
       state.snapshots = Array.isArray(d.snapshots) ? d.snapshots : [];
       state.performance = d.performance || null;
       state.screener = d.screener || null;
+      state.notifications = Array.isArray(d.notifications?.events) ? d.notifications.events : [];
+      state.charts = d.charts?.symbols || {};
       state.lastDataUpdate = d.builtAt || null;
       state.embeddedLoaded = true;
       renderAll();
@@ -130,6 +137,7 @@ function renderAll() {
   renderPerformance();
   renderHistory();
   renderLogs();
+  renderNotifications();
   $("ft-version").textContent = state.status?.version ? `engine v${state.status.version}` : "";
 }
 
@@ -215,6 +223,43 @@ function renderOverview() {
   $("top-volume").innerHTML = top.slice(0, 10).map((t, i) =>
     `<li><span><span class="rank">#${i + 1}</span>${t.symbol}</span>
      <span>$${Number(t.quoteVolume / 1e6).toFixed(1)}M</span></li>`).join("");
+
+  renderFundingHeatmap();
+}
+
+/* funding-rate heatmap from the universe snapshot (context only) */
+function renderFundingHeatmap() {
+  const grid = $("funding-grid");
+  if (!grid) return;
+  const rows = state.screener?.rows || [];
+  const funded = rows.filter(r => r.fundingRatePct != null);
+  grid.innerHTML = "";
+  if (!funded.length) { grid.innerHTML = `<span class="muted small">No funding data yet.</span>`; return; }
+  // spread = max(|funding|) to normalise the colour scale
+  const maxAbs = Math.max(0.02, ...funded.map(r => Math.abs(r.fundingRatePct)));
+  const cell = (r) => {
+    const v = r.fundingRatePct;
+    const t = Math.min(1, Math.abs(v) / maxAbs);       // intensity 0..1
+    const pos = v >= 0;
+    const g = Math.round(40 + (pos ? 120 : 40) - t * 40); // not used directly, kept simple
+    const bg = pos
+      ? `rgba(46, 160, 67, ${0.15 + 0.75 * t})`         // green (crowd long)
+      : `rgba(248, 81, 73, ${0.15 + 0.75 * t})`;        // red (crowd short)
+    const txt = v.toFixed(3).replace("0.", ".").replace("-", "−");
+    return `<div class="funding-cell" style="background:${bg};color:${t > 0.5 ? "#fff" : "#0b0e14"}"
+      data-sym="${r.symbol}"><span>${txt}</span><span class="f-tip">${r.symbol} · ${v.toFixed(4)}%/8h</span></div>`;
+  };
+  grid.innerHTML = funded.map(cell).join("");
+  // legend
+  const existing = document.querySelector(".funding-legend");
+  if (existing) existing.remove();
+  const legend = document.createElement("div");
+  legend.className = "funding-legend";
+  legend.innerHTML = `<span>Long bias</span><span class="lut" style="background:rgba(46,160,67,.9)"></span>
+    <span>·</span><span class="lut" style="background:rgba(46,160,67,.3)"></span>
+    <span>Short bias</span><span class="lut" style="background:rgba(248,81,73,.3)"></span>
+    <span class="lut" style="background:rgba(248,81,73,.9)"></span>`;
+  grid.parentElement.appendChild(legend);
 }
 
 /* --------------------------------------------------- universe screener */
@@ -311,11 +356,64 @@ function signalCard(s) {
       ${s.fundingRatePct != null ? `<span class="tag ${s.fundingExtreme ? "hot" : ""}">funding ${s.fundingRatePct.toFixed(4)}%/8h${s.fundingExtreme ? " ⚠" : ""}</span>` : ""}
       ${s.rangeLabel ? `<span class="tag ${s.rangeLabel === "DISCOUNT" || s.rangeLabel === "PREMIUM" ? "on" : ""}">${s.rangeLabel} ${(s.rangePosition * 100).toFixed(0)}%</span>` : ""}
     </div>
+    ${miniChart(s)}
     <div class="sig-status">
       <span class="status-badge st-${s.status}">${s.status.replace("_", " ")}</span>
       <span class="sig-time">generated ${fmtTime(s.generatedAt)} · ${s.timeframe}</span>
     </div>`;
   return card;
+}
+
+/* small candlestick SVG for an active signal card (bounded, drawn from chart-candles.json) */
+function miniChart(s) {
+  const blk = state.charts[s.symbol];
+  if (!blk || !Array.isArray(blk.candles) || blk.candles.length < 3) return "";
+  const cs = blk.candles;
+  const m = blk.markers || {};
+  const W = 560, H = 118, PAD = 46, B = 3;
+  let lo = Infinity, hi = -Infinity;
+  cs.forEach(c => { lo = Math.min(lo, c.l); hi = Math.max(hi, c.h); });
+  if (m.sweepLevel != null) lo = Math.min(lo, m.sweepLevel), hi = Math.max(hi, m.sweepLevel);
+  if (m.eventLevel != null) lo = Math.min(lo, m.eventLevel), hi = Math.max(hi, m.eventLevel);
+  if (m.fvgBottom != null) lo = Math.min(lo, m.fvgBottom), hi = Math.max(hi, m.fvgTop);
+  if (m.obBottom != null) lo = Math.min(lo, m.obBottom), hi = Math.max(hi, m.obTop);
+  if (m.trigger != null) lo = Math.min(lo, m.trigger), hi = Math.max(hi, m.trigger);
+  [m.stop, m.target].forEach(v => { if (v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); } });
+  if (hi <= lo) return "";
+  const span = hi - lo;
+  lo -= span * 0.06; hi += span * 0.06;
+  const y = (v) => PAD + (1 - (v - lo) / (hi - lo)) * (H - PAD - 6);
+  const x = (i) => PAD + (i / (cs.length - 1)) * (W - PAD - 4);
+  const bw = Math.max(1.5, ((W - PAD - 4) / cs.length) * 0.6);
+  const LINE = "var(--line)";
+  let body = "";
+  cs.forEach((c, i) => {
+    const up = c.c >= c.o;
+    const clr = up ? "var(--green)" : "var(--red)";
+    const cx = x(i), yO = y(c.o), yC = y(c.c);
+    const top = Math.min(yO, yC), hgt = Math.max(1.5, Math.abs(yC - yO));
+    body += `<line x1="${cx}" x2="${cx}" y1="${y(c.h)}" y2="${y(c.l)}" stroke="${clr}" stroke-width="1"/>`;
+    body += `<rect x="${cx - bw / 2}" y="${top}" width="${bw}" height="${hgt}" fill="${clr}" rx="0.5"/>`;
+  });
+  // level markers
+  const level = (v, clr, dash, label) => {
+    if (v == null) return "";
+    const yy = y(v);
+    return `<line x1="${PAD}" x2="${W - 4}" y1="${yy}" y2="${yy}" stroke="${clr}" stroke-width="1" stroke-dasharray="${dash}"/>
+      <text x="${PAD + 2}" y="${yy - 2}" class="m-tip" fill="${clr}">${label} ${fmtPrice(v)}</text>`;
+  };
+  body += level(m.stop, "var(--red)", "3 3", "SL");
+  body += level(m.target, "var(--green)", "3 3", "TP");
+  body += level(m.trigger, "var(--amber)", "1 3", m.trigger != null ? (m.direction === "LONG" ? "buy" : "sell") : "");
+  if (m.sweepLevel != null) body += `<circle cx="${x(cs.length - 1)}" cy="${y(m.sweepLevel)}" r="2.5" fill="var(--violet)"/>`;
+  return `<div class="mini-chart">
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <line x1="${PAD}" x2="${PAD}" y1="6" y2="${H - 6}" stroke="${LINE}"/>
+      <line x1="${PAD}" x2="${W - 4}" y1="${H - 6}" y2="${H - 6}" stroke="${LINE}"/>
+      <text x="${PAD - 4}" y="${H - 8}" class="m-tip" text-anchor="end" fill="var(--muted)">${cs.length}×15m</text>
+      ${body}
+    </svg>
+  </div>`;
 }
 
 function renderActive() {
@@ -575,6 +673,26 @@ function renderLogs() {
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+function renderNotifications() {
+  const list = $("notif-list");
+  if (!list) return;
+  const kindLabel = { new_signal: "NEW SIGNAL", triggered: "TRIGGERED", resolved: "RESOLVED",
+                      scan_health: "HEALTH", scan_failed: "SCAN FAILED" };
+  let items = state.notifications.slice().reverse(); // newest first
+  if (state.notifKind !== "all") items = items.filter(e => e.kind === state.notifKind);
+  if (state.notifSearch) items = items.filter(e => (e.symbol || "").toLowerCase().includes(state.notifSearch));
+  list.innerHTML = "";
+  $("notif-empty").classList.toggle("hidden", items.length > 0);
+  items.slice(0, 80).forEach(e => {
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <span class="notif-kind k-${e.kind}">${kindLabel[e.kind] || e.kind}</span>
+      <span class="notif-msg">${escapeHtml(e.msg || e.status || "—")}</span>
+      <span class="notif-time">${e.ts ? fmtClock(e.ts) : "—"}</span>`;
+    list.appendChild(li);
+  });
+}
+
 /* --------------------------------------------------- interactions */
 function bindPills(containerId, onPick, multi) {
   const root = $(containerId);
@@ -599,6 +717,10 @@ bindPills("hist-outcome", (b) => { state.histOutcome = b.dataset.o; renderHistor
 bindPills("hist-range", (b) => { state.histRange = +b.dataset.range; renderHistory(); });
 $("hist-search").addEventListener("input", (e) => {
   state.histSearch = e.target.value.trim().toLowerCase(); renderHistory();
+});
+bindPills("notif-kind", (b) => { state.notifKind = b.dataset.n; renderNotifications(); });
+$("notif-search").addEventListener("input", (e) => {
+  state.notifSearch = e.target.value.trim().toLowerCase(); renderNotifications();
 });
 
 document.querySelector("#screener-table thead").addEventListener("click", (ev) => {

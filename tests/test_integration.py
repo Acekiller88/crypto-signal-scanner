@@ -51,10 +51,18 @@ def test_full_scan_pipeline(tmp_path, cfg, client, monkeypatch):
     assert validate_signals_payload(signals_payload, cfg, T0 + 10 ** 7) == []
     # status + performance + snapshot files written & mirrored for the frontend
     for name in ("system-status.json", "performance.json", "market-snapshots.json",
-                 "signals.json", "universe-snapshot.json"):
+                 "signals.json", "universe-snapshot.json", "notifications.json"):
         assert (tmp_path / "data" / name).exists()
         assert (tmp_path / "frontend" / "data" / name).exists()
     assert (tmp_path / "frontend" / "data" / "badge.json").exists()
+    # notifications feed & chart window are produced without polluting the repo root
+    assert (tmp_path / "data" / "chart-candles.json").exists()
+    assert (tmp_path / "frontend" / "data" / "chart-candles.json").exists()
+    notif = json.loads((tmp_path / "data" / "notifications.json").read_text())
+    assert any(e["kind"] == "new_signal" and e["symbol"] == "TESTUSDT" for e in notif["events"])
+    charts = json.loads((tmp_path / "data" / "chart-candles.json").read_text())
+    assert "TESTUSDT" in charts["symbols"]
+    assert len(charts["symbols"]["TESTUSDT"]["candles"]) >= 10
     screener = json.loads((tmp_path / "data" / "universe-snapshot.json").read_text())
     assert len(screener["rows"]) == 1
     assert screener["rows"][0]["symbol"] == "TESTUSDT"

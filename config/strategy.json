@@ -158,5 +158,28 @@
     "enabled": true,
     "requireAlignment": false,
     "_doc": "1D macro bias is fetched, stored and displayed. requireAlignment=true would hard-reject signals against a strong 1D bias (OFF by default to preserve current behaviour)."
+  },
+  "notifications": {
+    "enabled": true,
+    "channels": ["telegram", "discord"],
+    "events": {
+      "newSignal": true,
+      "triggered": true,
+      "resolved": true,
+      "scanHealth": true,
+      "scanFailed": true
+    },
+    "retention": 500,
+    "minScoreForNotice": 80,
+    "telegram": {
+      "botTokenEnv": "TELEGRAM_BOT_TOKEN",
+      "chatIdEnv": "TELEGRAM_CHAT_ID",
+      "parseMode": "HTML"
+    },
+    "discord": {
+      "webhookUrlEnv": "DISCORD_WEBHOOK_URL",
+      "username": "Signal Scanner"
+    },
+    "_doc": "Channels are only activated when the matching credential environment variable is present (see *.env). Sending happens in the GitHub Actions workflow via scanner.notifications --send. data/notifications.json is the dashboard feed (bounded); data/notifications-pending.json is the queue drained by the sender."
   }
 }

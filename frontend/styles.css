@@ -224,3 +224,40 @@ body {
   .stat-value { font-size: 17px; }
   .top-status { width: 100%; }
 }
+
+/* ---------------- funding heatmap ---------------- */
+.funding-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 4px; max-height: 190px; overflow-y: auto; }
+.funding-cell {
+  position: relative; min-height: 30px; border-radius: 5px; font-family: var(--mono);
+  font-size: 10px; color: #0b0e14; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-weight: 600;
+}
+.funding-cell .f-tip {
+  position: absolute; bottom: 102%; left: 50%; transform: translateX(-50%);
+  background: #151b26; color: var(--text); border: 1px solid var(--line); border-radius: 4px;
+  padding: 2px 6px; font-size: 10px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .12s;
+}
+.funding-cell:hover .f-tip { opacity: 1; }
+.funding-legend { display: flex; gap: 10px; margin-top: 10px; font-size: 11px; color: var(--muted); align-items: center; flex-wrap: wrap; }
+.funding-legend .lut { display: inline-flex; width: 12px; height: 12px; border-radius: 3px; }
+
+/* ---------------- notifications ---------------- */
+.notif-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.notif-list li {
+  display: flex; gap: 10px; align-items: flex-start; padding: 8px 6px; font-size: 13px;
+  border-bottom: 1px solid var(--line); color: var(--text);
+}
+.notif-list li:last-child { border-bottom: none; }
+.notif-kind { flex: 0 0 auto; font-size: 10px; padding: 2px 8px; border-radius: 10px; background: var(--card-2); color: var(--muted); }
+.notif-kind.k-new_signal { background: #12321c; color: var(--green); }
+.notif-kind.k-triggered { background: #2f2a10; color: var(--amber); }
+.notif-kind.k-resolved { background: #1b2233; color: var(--blue); }
+.notif-kind.k-scan_health, .notif-kind.k-scan_failed { background: #3a1414; color: var(--red); }
+.notif-msg { flex: 1; }
+.notif-time { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-family: var(--mono); }
+.notif-search { margin-top: 10px; width: 100%; box-sizing: border-box; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+
+/* ---------------- mini candlestick chart ---------------- */
+.mini-chart { margin: 10px 0 4px; background: #0a0d13; border-radius: 8px; padding: 6px; }
+.mini-chart svg { width: 100%; height: 118px; display: block; }
+.mini-chart .m-tip { font-size: 9px; fill: var(--muted); font-family: var(--mono); }

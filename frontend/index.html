@@ -77,6 +77,12 @@
         <h3>Top Liquidity (24h quote volume)</h3>
         <ol class="top-list" id="top-volume"></ol>
       </div>
+      <div class="card overview-funding">
+        <h3>Funding Rate Heatmap <span class="muted small">(%/8h · across the universe)</span></h3>
+        <div class="funding-grid" id="funding-grid"></div>
+        <p class="muted small">Extreme positive (crowd long) or negative (crowd short) funding is
+          context only — it never alters the confluence score. Hover for the symbol.</p>
+      </div>
     </div>
   </section>
 
@@ -303,6 +309,25 @@
   <section id="system-logs" class="section">
     <div class="section-head"><h2>9 · System Logs <span class="muted small">(latest scan events)</span></h2></div>
     <div class="card log-box"><pre id="log-box">—</pre></div>
+  </section>
+
+  <!-- ============ NOTIFICATIONS ============ -->
+  <section id="notifications" class="section">
+    <div class="section-head"><h2>10 · Notifications <span class="muted small">(event feed · Telegram/Discord)</span></h2></div>
+    <div class="card">
+      <div class="filter-pills" id="notif-kind">
+        <button class="pill active" data-n="all">All</button>
+        <button class="pill" data-n="new_signal">New signal</button>
+        <button class="pill" data-n="triggered">Triggered</button>
+        <button class="pill" data-n="resolved">Resolved</button>
+        <button class="pill" data-n="scan_health">Health</button>
+      </div>
+      <div id="notif-empty" class="empty small hidden">No notification events yet.</div>
+      <ul id="notif-list" class="notif-list"></ul>
+      <input type="search" id="notif-search" class="notif-search" placeholder="Filter symbol…">
+      <p class="muted small">This is a local event feed. The same events are pushed to Telegram/Discord
+        (when credentials are configured) via the GitHub Actions scan — see README section 7.</p>
+    </div>
   </section>
 
   <footer class="footer">

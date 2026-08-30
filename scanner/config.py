@@ -62,6 +62,18 @@ DEFAULTS: dict[str, Any] = {
     "lifecycle": {"triggerExpiryCandles": 12, "tradeExpiryCandles": 16, "resolveAmbiguousWith1m": True, "candleMs": 900_000},
     "dedupe": {"symbolCooldownMinutes": 240, "sameDirectionOnly": True, "maxActiveSignalsTotal": 12},
     "retention": {"marketSnapshots": 288, "logEntries": 200},
+    "chart": {"maxCandles": 60, "barsBeforeSignal": 40},
+    "notifications": {
+        "enabled": True,
+        "channels": ["telegram", "discord"],
+        "events": {"newSignal": True, "triggered": True, "resolved": True,
+                   "scanHealth": True, "scanFailed": True},
+        "retention": 500,
+        "minScoreForNotice": 80,
+        "telegram": {"botTokenEnv": "TELEGRAM_BOT_TOKEN", "chatIdEnv": "TELEGRAM_CHAT_ID",
+                     "parseMode": "HTML"},
+        "discord": {"webhookUrlEnv": "DISCORD_WEBHOOK_URL", "username": "Signal Scanner"},
+    },
 }
 
 

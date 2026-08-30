@@ -97,15 +97,15 @@ Tiada satu pun sistem pembanding yang menggabungkan ketiga-tiga ciri itu. Namun 
 | No-lookahead diuji + anti-repaint (immutability) | ✅ | ✅ | ❌ | 🟡 | ❌ |
 | Win rate jujur (sampel dipaparkan) | ✅ | ✅ | ❌ | n/a | ❌ |
 | Replay/backtest kausal | ✅ | ✅ | ❌ | ❌ | ❌ |
-| **Notifikasi Telegram/Discord** | ❌ | ✅ | ✅ | n/a | 🟡 |
-| **Carta candlestick per isyarat** | ❌ | 🟡 (plot) | ❌ | ❌ | ✅ |
-| **Jadual screener universe penuh** | ❌ | 🟡 | 🟡 | ❌ | ✅ |
-| **Konteks derivatives (funding/OI/CVD/liquidation)** | ❌ | 🟡 | 🟡 (dominance/korelasi) | ❌ | ✅ |
-| **Penapis sesi / kill-zone (ICT)** | ❌ | ❌ | ❌ | ❌ | ✅ |
+| **Notifikasi Telegram/Discord** | ✅ (v1.2) | ✅ | ✅ | n/a | 🟡 |
+| **Carta candlestick per isyarat** | ✅ (v1.2) | 🟡 (plot) | ❌ | ❌ | ✅ |
+| **Jadual screener universe penuh** | ✅ | 🟡 | 🟡 | ❌ | ✅ |
+| **Konteks derivatives (funding/OI/CVD/liquidation)** | 🟡 (funding/OI + heatmap) | 🟡 | 🟡 (dominance/korelasi) | ❌ | ✅ |
+| **Penapis sesi / kill-zone (ICT)** | ✅ | ❌ | ❌ | ❌ | ✅ |
 | **Optimizer parameter (hyperopt/walk-forward)** | ❌ | ✅ | ❌ | ❌ | ❌ |
 | Metrik risk-adjusted (Sharpe/DD/expectancy) | 🟡 | ✅ | ❌ | ❌ | ❌ |
 | Divergensi RSI | ❌ | ✅ | ❌ | ❌ | ❌ |
-| Premium/discount zones | ❌ | ❌ | ❌ | ❌ (roadmap) | ✅ |
+| Premium/discount zones | ✅ | ❌ | ❌ | ❌ (roadmap) | ✅ |
 | ML / AI | ❌ (sengaja) | ✅ (FreqAI) | 🟡 (LLM ringkasan) | ❌ | ❌ |
 | Kos siri bulanan | **RM0** | RM0 (perlu VPS utk live) | RM0+VPS? | RM0 | RM0+VPS |
 | Pelayan diperlukan | **Tiada** | Ya (live) | Ya | Tidak | Ya |
@@ -228,6 +228,33 @@ Diilhamkan oleh pump-dump-screener: tab pilihan untuk menanda isyarat "valid set
 | 10 | F3b Slippage + F10 Premium/discount | M | ★★★☆☆ |
 | 11 | F9 Divergensi RSI | M | ★★☆☆☆ |
 | 12 | F13 Walk-forward optimizer | L | ★★★★☆ (jangka panjang) |
+
+---
+
+### Status kemajuan (v1.2)
+
+Semenjak laporan ini ditulis, satu set penambahbaikan telah dilaksanakan dan
+diuji (135 ujian, semuanya lulus), sejajar dengan keutamaan di atas:
+
+| Item | Status | Catatan |
+|---|---|---|
+| F1 Notifikasi Telegram/Discord | ✅ Selesai | `scanner/notifications.py` + rentetan send dalam `scanner.yml`; feed `notifications.json` + baris gilir `notifications-pending.json`; konfigurasi `notifications` dalam `strategy.json`; `--dry-run` untuk ujian tanpa POST. |
+| F2 Jadual screener universe penuh | ✅ Selesai | `universe-snapshot.json` + jadual boleh isih/tapis pada dashboard. |
+| F3 Metrik expectancy/DD/Sharpe/slippage | ✅ Selesai | `performance.py` + paparan dashboard. |
+| F5 Eksport CSV + PWA manifest | ✅ Selesai | Butang CSV + `manifest.webmanifest`. |
+| F6 Konteks funding/OI | 🟡 Sebahagian | Funding/OI diambil & dipapar (tag kad + heatmap funding); *long/short ratio* & CVD belum. |
+| F7 Penapis sesi / kill-zone | ✅ Selesai | `scanner/sessions.py` + tag `session` pada kad. |
+| F8 Bias 1D | ✅ Selesai | `bias1d` + lajur 1D pada screener & kad. |
+| F10 Zon Premium/Discount | ✅ Selesai | `rangeLabel` / `rangePosition` pada kad. |
+| F11 Kalibrasi skor empirikal | ✅ Selesai | `scoreCalibration` dengan Wilson 95% CI. |
+| F14 Monte Carlo | ✅ Selesai | `monteCarlo` deterministik pada prestasi dashboard. |
+| Carta candlestick per isyarat | ✅ Selesai | `scanner/chart.py` → `chart-candles.json` (dibataskan, ditulis-ganti setiap scan) + SVG mini-chart pada kad. |
+| Automasi GitHub Actions | ✅ Disediakan (dulu TIADA) | `.github/workflows/scanner.yml` (cron */15) dan `tests.yml` kini wujud dan sah (YAML disemak). Sebelum ini README mendakwa ia wujud tetapi fail tidak hadir. |
+
+Baki (belum dilakukan): F9 divergensi RSI, F12 mitigasi OB + watchlist,
+F13 optimizer/walk-forward, F15 multi-exchange, F16 reviewer isyarat, dan
+konteks derivatives penuh (CVD/long-short ratio/liquidation). Semuanya boleh
+ditambah tanpa kos infrastruktur berbayar.
 
 ---
 

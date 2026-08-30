@@ -27,6 +27,8 @@ from .performance import compute_performance
 from .validation import validate_signal, validate_signals_payload, check_immutability
 from .persist import atomic_write_json
 from . import persist
+from . import notifications as notif
+from . import chart as chart_mod
 
 
 class ScanLog:
@@ -335,6 +337,25 @@ def scan_once(cfg: Config, log: ScanLog, client: MarketDataClient | None = None,
     persist.write_data_file("market-snapshots.json", snapshots)
     persist.write_data_file("universe-snapshot.json", screener_payload)  # overwritten each scan
     atomic_write_json(persist.frontend_data_dir() / "badge.json", badge)
+
+    # notifications: dashboard feed + pending queue (drained by the CI sender)
+    try:
+        fresh_events = notif.collect_events(previous_signals, merged_previous,
+                                            published_new, status, cfg, now_ms)
+        notif.update_feed(fresh_events, cfg, now_ms)
+        notif.write_pending(fresh_events, cfg, now_ms)
+        for e in fresh_events:
+            log.info(f"NOTIFY {e.get('kind')} {e.get('symbol', '')} {e.get('msg', '')}")
+    except Exception as exc:  # never let a notification bug break the scan
+        log.warn(f"notifications skipped: {exc}")
+
+    # mini candlestick snapshots for active signal cards (overwritten, no growth)
+    try:
+        chart_snaps = chart_mod.build_chart_snapshots(all_signals, candle_map, cfg, now_ms)
+        chart_mod.write_chart_snapshots(chart_snaps, now_ms)
+    except Exception as exc:
+        log.warn(f"chart snapshots skipped: {exc}")
+
     log.info(f"SCAN COMPLETE {len(scan_symbols)} symbols scanned, {len(analyses)} valid, "
              f"{len(failed_symbols)} data failures, {len(published_new)} signals generated "
              f"({duration_ms} ms)")
