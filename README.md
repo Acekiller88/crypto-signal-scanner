@@ -364,7 +364,8 @@ pipeline, failure policy, no-lookahead slice stability, replay determinism).
 | Workflow doesn't commit | Enable **Settings → Actions → General → Workflow permissions → Read and write**. |
 | "No data changes — skipping commit" | Normal: nothing changed, no empty commits are created. |
 | Dashboard shows `price: scan snapshot` | Browser couldn't reach the Binance ticker (network/region). JSON data is unaffected. |
-| 0 signals for long stretches | By design. Loosen `scoring.minScore`, `risk.minRr`, or `signalModel` bands deliberately, then replay-test. |
+| 0 signals for long stretches | Often by design. Run `python -m scanner.diagnose` to see exactly which gate is consuming the candidates, and `--sensitivity` to see what each threshold costs. Loosen deliberately, then replay-test — never tune until the output looks satisfying. |
+| Dashboard says `DATA STALE` / `SCANNER OFFLINE` | The data is older than 45 min / 3 h. The scheduler did not run: check the Actions tab, and remember GitHub disables cron after 60 days of repo inactivity. Re-arm with a manual `workflow_dispatch`. |
 | Scan marked DEGRADED | Some symbols failed or data arrived late; previous valid data retained and warning shown. |
 
 ## 14. Known limitations
@@ -372,8 +373,13 @@ pipeline, failure policy, no-lookahead slice stability, replay determinism).
 - **15-minute cadence**: GitHub cron jitter (minutes) means scans are
   near-quarter-hour, not exact; outcome evaluation uses closed candles, so
   intracandle path order is resolved only via 1M data (else AMBIGUOUS).
-- **Single data source** (Binance public). Outages degrade the system; no
-  simulated data is ever substituted.
+- **Data source concentration**: the primary chain is three Binance-owned
+  hostnames, which a single HTTP 451 takes down together. A Bybit v5 adapter
+  provides a genuinely independent venue as the last hop, but Bybit's symbol
+  universe overlaps rather than matches Binance's, so a failover scan may cover
+  a slightly different set of symbols. The serving venue is always recorded in
+  `system-status.lastScan.apiStats.endpointUsed`. No simulated data is ever
+  substituted.
 - **Spot fallback fidelity**: if both futures endpoints are blocked, the
   official spot market-data mirror is used and flagged — order-flow differs
   slightly from perps.
@@ -383,6 +389,26 @@ pipeline, failure policy, no-lookahead slice stability, replay determinism).
   curve-fitted edge. No profitability claim is made or implied.
 - Ambiguous candles resolved with 1M data consume extra API requests
   (configurable via `lifecycle.resolveAmbiguousWith1m`).
+
+---
+
+## 15. Analysis documents
+
+Written in Malay, under `docs/`.
+
+| Document | What it is |
+|---|---|
+| [`AUDIT-PELAKSANAAN.md`](docs/AUDIT-PELAKSANAAN.md) | **Start here.** What was verified, what was changed, and what was deliberately left alone. Every claim comes with a way to check it. |
+| [`KAJIAN-SISTEM.md`](docs/KAJIAN-SISTEM.md) | Deep review of the signal model with an expert-panel critique and a prioritised action plan. |
+| [`BENCHMARK-ANALYSIS.md`](docs/BENCHMARK-ANALYSIS.md) | Comparison against comparable open-source scanners, SMC libraries and full trading bots. |
+| [`ANALISIS-NVIDIA-NIM.md`](docs/ANALISIS-NVIDIA-NIM.md) | Feasibility note on NVIDIA NIM. Conclusion: research use only — production needs an AI Enterprise licence. |
+
+Useful diagnostics:
+
+```bash
+python -m scanner.diagnose --sensitivity   # why zero signals, and what each threshold costs
+python -m scanner.check_docs               # verify this README against reality
+```
 
 ---
 
