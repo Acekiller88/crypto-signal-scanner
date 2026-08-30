@@ -1,0 +1,97 @@
+{
+  "_doc": "ASCEND-30 strategy configuration. All engine thresholds/weights live here (nothing hard-coded). Overrides are deep-merged over built-in defaults in ascend/config.py.",
+  "version": 1,
+  "market": {
+    "category": "linear",
+    "exchange": "bybit",
+    "base": "https://api.bybit.com"
+  },
+  "universe": {
+    "topN": 30,
+    "minTurnover24hUsd": 5000000,
+    "excludeSymbolPatterns": ["BULLUSDT", "BEARUSDT", "UPUSDT", "DOWNUSDT"],
+    "excludeBaseAssets": ["USDC", "FDUSD", "TUSD", "DAI", "BUSD", "USDP", "AEUR"]
+  },
+  "timeframes": {
+    "trend": "D",
+    "confirm": "240",
+    "entry": "15"
+  },
+  "indicators": {
+    "emaFast": 20,
+    "emaMid": 50,
+    "emaSlow": 200,
+    "rsiPeriod": 14,
+    "adxPeriod": 14,
+    "atrPeriod": 14,
+    "relVolumeLookback": 20,
+    "vwapWindow": 48,
+    "donchianTrendN": 20,
+    "donchianExitN": 10
+  },
+  "structure": {
+    "swingLookback": 2,
+    "minSwingAgeBars": 3,
+    "displacementBodyAtrMultiple": 1.5,
+    "sweepMaxAtrMultiple": 1.0,
+    "equalLevelAtrTolerance": 0.1,
+    "maxStructureSwings": 40,
+    "mssWindowBars": 12
+  },
+  "profile": {
+    "valueAreaPct": 0.70,
+    "lookbackCandles": 120,
+    "rows": 48,
+    "atrSmooth": 14
+  },
+  "signalModel": {
+    "minScoreForSignal": 70,
+    "strongBuyProb": 0.70,
+    "buyProb": 0.55,
+    "sellProb": 0.40,
+    "minRr": 2.5,
+    "preferredRr": 3.0,
+    "stopMaxAtrMultiple": 2.5,
+    "stopMinAtrMultiple": 1.0,
+    "stopBufferAtrMultiple": 0.5,
+    "timeStopBars": 24,
+    "breakevenAtR": 1.0
+  },
+  "scoring": {
+    "weights": {
+      "trend": 0.20,
+      "structure": 0.20,
+      "liquidity": 0.15,
+      "momentum": 0.15,
+      "volume": 0.10,
+      "volatility": 0.10,
+      "risk": 0.10
+    },
+    "logistic": {"a": -3.6, "b": 6.0},
+    "minSampleForCalibration": 20,
+    "_doc": "weights sum to 1.0. logistic maps score/100 -> P(profit>=1R); refit from resolved history before trusting at scale."
+  },
+  "risk": {
+    "perTradeRiskBasePct": 1.0,
+    "riskOfBufferFactor": 0.08,
+    "minRiskPct": 0.25,
+    "maxRiskPct": 1.0,
+    "maxPortfolioHeatPct": 6.0,
+    "dailyLossLimitPct": 1.5,
+    "weeklyLossLimitPct": 4.0,
+    "maxDrawdownPct": 8.0,
+    "correlationGroupSize": 1
+  },
+  "retention": {
+    "signals": 2000,
+    "logEntries": 400
+  },
+  "sessions": {
+    "enabled": true,
+    "killZones": [
+      {"name": "ASIA", "startUtcHour": 0, "endUtcHour": 6, "weight": 1.0},
+      {"name": "LONDON", "startUtcHour": 7, "endUtcHour": 10, "weight": 1.2},
+      {"name": "NEW_YORK", "startUtcHour": 12, "endUtcHour": 15, "weight": 1.1}
+    ]
+  }
+}
