@@ -32,6 +32,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from .costs import CostModel
+
 
 @dataclass
 class Setup:
@@ -84,8 +86,24 @@ def build_setup(direction: str, price: float, atr: float,
     stop_dist = abs(trigger - stop)
     if stop_dist > risk.get("maxStopAtrMultiple", 3.0) * atr:
         return None, f"stop too wide ({stop_dist / atr:.2f}x ATR)"
-    if stop_dist < 0.15 * atr:
-        return None, "stop too tight (<0.15x ATR)"
+    min_stop_atr = risk.get("minStopAtrMultiple", 0.15)
+    if stop_dist < min_stop_atr * atr:
+        return None, f"stop too tight (<{min_stop_atr}x ATR)"
+
+    # Transaction-cost gate: a setup whose risk budget is smaller than the cost
+    # of taking it cannot be won, however good its confluence looks. Expressed
+    # in R so it scales with the pair's volatility instead of a fixed ATR
+    # multiple (0.1% ATR and 3% ATR pairs are not the same proposition).
+    cost_model = CostModel.from_cfg(cfg)
+    max_cost_r = cfg.get("costs.maxCostR", 0.25)
+    cost_r = cost_model.cost_in_r({
+        "direction": direction.upper(), "triggerPrice": trigger, "stopLoss": stop,
+        "entryPrice": trigger, "fundingRatePct": None,
+        "triggeredAt": None, "closedAt": None,
+    })
+    if cost_r is not None and cost_r > max_cost_r:
+        return None, (f"transaction cost too high ({cost_r:.2f}R of risk per round "
+                      f"trip > {max_cost_r}R cap)")
 
     min_rr = risk.get("minRr", 2.5)
     pref_rr = risk.get("preferredRr", 3.0)

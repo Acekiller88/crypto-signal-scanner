@@ -96,7 +96,17 @@
     "entryZoneAtrMultiple": 0.5,
     "maxStopAtrMultiple": 3.5,
     "maxRunupAtrMultiple": 3.5,
-    "minStructureRoomAtrMultiple": 1.0
+    "minStructureRoomAtrMultiple": 1.0,
+    "minStopAtrMultiple": 0.15
+  },
+  "costs": {
+    "enabled": true,
+    "entryFeePct": 0.05,
+    "exitFeePct": 0.05,
+    "useFunding": true,
+    "fundingIntervalMs": 28800000,
+    "maxCostR": 0.25,
+    "_doc": "Binance USD-M VIP0 taker 0.05%/side; entry and exit are stop orders so both are taker. maxCostR rejects any setup whose round-trip cost exceeds that fraction of 1R -- a risk budget smaller than the cost of taking it cannot be won. Per-signal cost is reported as costR with the net figure in rMultipleNet; costs are NEVER netted into rMultiple silently."
   },
   "scoring": {
     "minScore": 80,
@@ -127,6 +137,10 @@
   "retention": {
     "marketSnapshots": 288,
     "logEntries": 200
+  },
+  "performance": {
+    "monteCarloBlockLength": null,
+    "_doc": "null = automatic moving-block length round(n^(1/3)), capped at n//2. Blocks (not single trades) are resampled so correlated losing streaks survive; an independent shuffle understates maxDDp95. Set an integer to override."
   },
   "sessions": {
     "killZones": [

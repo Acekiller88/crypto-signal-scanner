@@ -16,14 +16,26 @@ TRIGGERED
     lifecycle.resolveAmbiguousWith1m). Ambiguous is never counted as a win.
     Holding longer than tradeMaxDurationMs -> CANCELLED (max holding time).
 
+R multiples
+-----------
+``rMultiple`` is GROSS and is measured in units of PLANNED risk
+(``|trigger - stop|``, the unit the position was sized against) from the
+ACTUAL fill. One denominator for both directions: a stop-out after a gap fill
+worse than the trigger is therefore *more negative* than -1R, and a TP hit is
+worth *less* than the planned RR. Transaction costs are reported separately as
+``costR`` with the net figure in ``rMultipleNet`` (see ``costs.py``) -- they are
+never silently netted into ``rMultiple``.
+
 Immutability: only currentPrice/currentPriceAt, status, triggeredAt,
-closedAt, outcome, rMultiple and updatedAt are ever written after creation.
-Entry / trigger / SL / TP are never modified (no repainting).
+closedAt, outcome, rMultiple, costR, rMultipleNet and updatedAt are ever
+written after creation. Entry / trigger / SL / TP are never modified (no
+repainting).
 """
 from __future__ import annotations
 
 from typing import Optional
 
+from .costs import CostModel, apply_costs
 from .market_data import Candle, MarketDataClient, MarketDataError
 
 from .signals import (WAITING_TRIGGER, TRIGGERED, WIN, LOSS, EXPIRED,
@@ -59,7 +71,8 @@ def _resolve_with_1m(client: Optional[MarketDataClient], symbol: str, candle: Ca
 
 def update_signal(sig: dict, candles: list[Candle], now_ms: int,
                   client: Optional[MarketDataClient] = None,
-                  allow_1m: bool = True) -> dict:
+                  allow_1m: bool = True,
+                  costs: Optional[CostModel] = None) -> dict:
     """Advance one signal through time. Returns the (possibly) updated signal."""
     if sig["status"] not in ACTIVE_STATUSES:
         # refresh current price from the latest candle if provided
@@ -105,9 +118,9 @@ def update_signal(sig: dict, candles: list[Candle], now_ms: int,
             if tp_hit and sl_hit:
                 resolved = _resolve_with_1m(client, sig["symbol"], c, sl, tp, d, allow_1m)
                 if resolved == WIN:
-                    _close(sig, WIN, tp, c, now_ms)
+                    _close(sig, WIN, tp, c, now_ms, costs)
                 elif resolved == LOSS:
-                    _close(sig, LOSS, sl, c, now_ms)
+                    _close(sig, LOSS, sl, c, now_ms, costs)
                 else:
                     sig["status"] = AMBIGUOUS
                     sig["outcome"] = "tp_and_sl_in_same_candle"
@@ -115,10 +128,10 @@ def update_signal(sig: dict, candles: list[Candle], now_ms: int,
                     sig["updatedAt"] = now_ms
                 break
             if tp_hit:
-                _close(sig, WIN, tp, c, now_ms)
+                _close(sig, WIN, tp, c, now_ms, costs)
                 break
             if sl_hit:
-                _close(sig, LOSS, sl, c, now_ms)
+                _close(sig, LOSS, sl, c, now_ms, costs)
                 break
             continue
 
@@ -128,9 +141,9 @@ def update_signal(sig: dict, candles: list[Candle], now_ms: int,
             if tp_hit and sl_hit:
                 resolved = _resolve_with_1m(client, sig["symbol"], c, sl, tp, d, allow_1m)
                 if resolved == WIN:
-                    _close(sig, WIN, tp, c, now_ms)
+                    _close(sig, WIN, tp, c, now_ms, costs)
                 elif resolved == LOSS:
-                    _close(sig, LOSS, sl, c, now_ms)
+                    _close(sig, LOSS, sl, c, now_ms, costs)
                 else:
                     sig["status"] = AMBIGUOUS
                     sig["outcome"] = "tp_and_sl_in_same_candle"
@@ -138,19 +151,18 @@ def update_signal(sig: dict, candles: list[Candle], now_ms: int,
                     sig["updatedAt"] = now_ms
                 break
             if tp_hit:
-                _close(sig, WIN, tp, c, now_ms)
+                _close(sig, WIN, tp, c, now_ms, costs)
                 break
             if sl_hit:
-                _close(sig, LOSS, sl, c, now_ms)
+                _close(sig, LOSS, sl, c, now_ms, costs)
                 break
             if c.closeTime - sig["triggeredAt"] > sig.get("tradeMaxDurationMs", 4 * 3_600_000):
                 sig["status"] = CANCELLED
                 sig["outcome"] = "max_holding_duration_exceeded"
                 sig["closedAt"] = c.closeTime
-                sig["rMultiple"] = round((c.close - sig["entryPrice"]) /
-                                         abs(sig["entryPrice"] - sl) *
-                                         (1 if is_long else -1), 4)
+                sig["rMultiple"] = r_multiple(sig, c.close)
                 sig["updatedAt"] = now_ms
+                apply_costs(sig, costs)
                 break
 
     # last closed candle refreshes current price (allowed mutable field)
@@ -164,22 +176,39 @@ def update_signal(sig: dict, candles: list[Candle], now_ms: int,
     return sig
 
 
-def _close(sig: dict, status: str, level: float, candle: Candle, now_ms: int) -> None:
+def r_multiple(sig: dict, exit_price: float) -> Optional[float]:
+    """P&L in units of PLANNED risk, measured from the ACTUAL fill.
+
+    The denominator is always ``|trigger - stop|`` -- the risk the position was
+    sized against -- and the numerator is always measured from the real entry.
+    Using one denominator for both directions keeps gap fills honest either
+    way: a stop-out after a bad gap fill is *worse* than -1R, and a TP hit is
+    worth *less* than the planned RR. (The previous code divided wins by the
+    actual-entry risk but hard-coded losses at -1.0, which made the reported
+    statistics progressively more optimistic as slippage got worse.)
+    """
+    planned = abs(sig["triggerPrice"] - sig["stopLoss"])
+    if planned <= 0:
+        return None
+    entry = sig.get("entryPrice") or sig["triggerPrice"]
+    move = (exit_price - entry) if sig["direction"] == "LONG" else (entry - exit_price)
+    return round(move / planned, 4)
+
+
+def _close(sig: dict, status: str, level: float, candle: Candle, now_ms: int,
+           costs: Optional[CostModel] = None) -> None:
     sig["status"] = status
     sig["closedAt"] = candle.closeTime
     sig["updatedAt"] = now_ms
     sig["outcome"] = "tp_hit" if status == WIN else "sl_hit"
-    entry = sig["entryPrice"] or sig["triggerPrice"]
-    risk = abs(entry - sig["stopLoss"])
-    if status == WIN:
-        sig["rMultiple"] = round(abs(level - entry) / risk, 4) if risk > 0 else None
-    else:
-        sig["rMultiple"] = -1.0
+    sig["rMultiple"] = r_multiple(sig, level)
+    apply_costs(sig, costs)
 
 
 def update_outcomes(signals: list[dict], candle_map: dict[str, list[Candle]],
                     now_ms: int, client: Optional[MarketDataClient] = None,
-                    allow_1m: bool = True) -> list[dict]:
+                    allow_1m: bool = True,
+                    costs: Optional[CostModel] = None) -> list[dict]:
     """Update every active signal; fetch missing candles via client when available."""
     updated: list[dict] = []
     for sig in signals:
@@ -191,5 +220,5 @@ def update_outcomes(signals: list[dict], candle_map: dict[str, list[Candle]],
                 candles = []
         if candles is None:
             candles = []
-        updated.append(update_signal(sig, candles, now_ms, client, allow_1m))
+        updated.append(update_signal(sig, candles, now_ms, client, allow_1m, costs))
     return updated

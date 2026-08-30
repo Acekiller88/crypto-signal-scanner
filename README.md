@@ -1,7 +1,7 @@
 # 📡 Crypto 15-Minute High-Quality Signal Scanner
 
-[![scanner](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FAcekiller88%2FFinal-Trading-Said%2Fmain%2Ffrontend%2Fbadge.json)](https://github.com/Acekiller88/Final-Trading-Said/actions)
-[![Tests](https://github.com/Acekiller88/Final-Trading-Said/actions/workflows/tests.yml/badge.svg)](https://github.com/Acekiller88/Final-Trading-Said/actions/workflows/tests.yml)
+[![scanner](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FAcekiller88%2Fcrypto-signal-scanner%2Fmain%2Ffrontend%2Fdata%2Fbadge.json)](https://github.com/Acekiller88/crypto-signal-scanner/actions)
+[![Tests](https://github.com/Acekiller88/crypto-signal-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/Acekiller88/crypto-signal-scanner/actions/workflows/tests.yml)
 
 A **zero-cost, production-ready crypto market-analysis and signal-generation system** for the
 top-100 liquid Binance USDT-perpetual pairs. It scans every 15 minutes, identifies high-confluence
@@ -64,6 +64,7 @@ crypto-signal-scanner/
 │   ├── risk.py               trigger/entry/SL/TP construction, RR math
 │   ├── signals.py            LONG/SHORT models, hard rejections, dedupe, signal objects
 │   ├── outcomes.py           chronological lifecycle engine (+1M ambiguity resolution)
+│   ├── costs.py              taker fees + funding expressed in R (gross vs net)
 │   ├── performance.py        win rate, profit factor, streaks, breakdowns
 │   ├── validation.py         data-integrity + no-repaint enforcement
 │   ├── persist.py            atomic JSON writes + retention
@@ -75,7 +76,7 @@ crypto-signal-scanner/
 │   └── data/                 ← mirror of /data served statically by Cloudflare Pages
 ├── config/strategy.json      ALL strategy parameters (nothing hard-coded)
 ├── data/                     signals.json · performance.json · system-status.json · market-snapshots.json
-├── tests/                    103 unit + integration tests (offline, deterministic)
+├── tests/                    153 unit + integration tests (offline, deterministic)
 ├── .github/workflows/
 │   ├── scanner.yml           cron */15 scan → validate → commit → push
 │   └── tests.yml             pytest on every push/PR
@@ -90,7 +91,7 @@ crypto-signal-scanner/
 git clone <your-repo-url> crypto-signal-scanner
 cd crypto-signal-scanner
 pip install -r requirements.txt      # pytest only; the engine is stdlib-only
-python -m pytest tests/ -q           # 103 tests must pass
+python -m pytest tests/ -q           # 153 tests must pass
 ```
 
 ## 3. Local execution
@@ -192,7 +193,8 @@ If a company device blocks even these, ask IT, or view from a personal device
 | `rsi, adx, atr, atrPercent, relativeVolume, vwap` | indicator snapshot |
 | `status` | `WAITING_TRIGGER → TRIGGERED → WIN / LOSS / EXPIRED / AMBIGUOUS / CANCELLED` |
 | `expiryAt, tradeMaxDurationMs` | 12×15m trigger expiry; 4h max hold (configurable) |
-| `triggeredAt, closedAt, outcome, rMultiple` | lifecycle timestamps and R result |
+| `triggeredAt, closedAt, outcome, rMultiple` | lifecycle timestamps and **gross** R result |
+| `costR, rMultipleNet` | round-trip fees + funding expressed in R, and the **net** R result |
 
 `data/system-status.json` — scan telemetry (scheduled vs actual time, duration,
 universe, API stats, freshness, health) + rolling logs.
@@ -201,7 +203,7 @@ universe, API stats, freshness, health) + rolling logs.
 scan, no git growth): per-symbol price, 1D/4H/1H bias, regime, RSI, ADX, ATR%,
 relative volume, funding rate and open interest — rendered as the sortable
 Universe Screener table on the dashboard.
-`frontend/badge.json` — shields.io endpoint badge (last scan time + health).
+`frontend/data/badge.json` — shields.io endpoint badge (last scan time + health).
 `data/performance.json` — headline metrics (the dashboard also recomputes
 metrics client-side for its 7D/30D/90D/ALL filters).
 
@@ -267,7 +269,20 @@ Tiers: **A+ ≥ 90 · A ≥ 85 · B+ ≥ 80 · below 80 rejected** (all configur
 
 - **Win rate = wins ÷ (wins + losses)** — `WAITING`, `EXPIRED`, `AMBIGUOUS`,
   `CANCELLED` are never in the denominator; sample size always displayed.
-- **Profit factor** = ΣR(won) ÷ |ΣR(lost)| (a stop-out is −1R by definition).
+- **Profit factor** = ΣR(won) ÷ |ΣR(lost)|.
+- **R is measured from the ACTUAL fill against the PLANNED risk**
+  (`|trigger − stop|`, the unit the position was sized against), using that
+  single denominator for wins *and* losses. A stop-out after a fill worse than
+  the trigger is therefore **more negative than −1R**, and a TP hit is worth
+  **less** than the planned RR.
+- **Gross vs net** — `winRate`, `expectancyR`, `profitFactor`, `sharpeR` and
+  `monteCarlo` are **gross** (no fees). `winRateNet`, `expectancyNetR`,
+  `profitFactorNet` and `avgCostR` include taker fees on both legs plus
+  perpetual funding (`config/strategy.json → costs`). **Read the net figures.**
+- **Cost gate** — a setup whose round-trip cost exceeds `costs.maxCostR`
+  (default 0.25R) is **rejected**, not merely scored down: a risk budget
+  smaller than the cost of taking it cannot be won. On Binance USDⓈ-M at
+  0.05%/side this requires a risk budget of roughly ≥ 0.4% of price.
 - **AMBIGUOUS** — TP and SL touched within one 15M candle and 1-minute data
   cannot determine the order. Never counted as a win.
 - Breakdowns by direction, quality, regime, score band, symbol and date range.
@@ -328,7 +343,7 @@ live behaviour.
 ## 12. Testing
 
 ```bash
-python -m pytest tests/ -v          # 103 tests, fully offline
+python -m pytest tests/ -v          # 153 tests, fully offline
 ```
 
 Coverage: EMA/RSI/ATR/ADX/RelVol/VWAP (hand-computed vectors) · swing

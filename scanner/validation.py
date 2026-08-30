@@ -103,6 +103,21 @@ def validate_signals_payload(payload: dict, cfg, now_ms: int,
     return errors
 
 
+def restore_immutable(old: dict, new: dict) -> dict:
+    """Repair ``new`` in place by copying back the immutable fields from ``old``.
+
+    Only the frozen fields are restored: a signal that legitimately progressed
+    (e.g. TRIGGERED -> WIN) keeps its new status, outcome and timestamps.
+    Replacing the whole record with the old one -- the previous behaviour --
+    would have resurrected closed signals and discarded valid lifecycle
+    updates, which is worse than the violation it was meant to correct.
+    """
+    for field in IMMUTABLE_FIELDS:
+        if field in old:
+            new[field] = old[field]
+    return new
+
+
 def check_immutability(old_signals: list[dict], new_signals: list[dict]) -> list[str]:
     """Historical parameters must never be rewritten (no repainting, §33)."""
     errors: list[str] = []
@@ -110,6 +125,13 @@ def check_immutability(old_signals: list[dict], new_signals: list[dict]) -> list
     for new in new_signals:
         old = old_by_id.get(new["id"])
         if old is None:
+            continue
+        if old is new:
+            # Aliased input: the caller compared a signal with itself, so no
+            # violation could ever be reported. Fail loudly instead of silently
+            # returning [] -- this is exactly how the guard went unnoticed.
+            errors.append(f"{new['id']}: old and new are the SAME OBJECT -- the "
+                          "caller passed an aliased list, immutability is unverifiable")
             continue
         for field in IMMUTABLE_FIELDS:
             if field in old and field in new and old[field] != new[field]:
