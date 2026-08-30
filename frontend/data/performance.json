@@ -1,0 +1,76 @@
+{
+  "total": 0,
+  "waiting": 0,
+  "triggered": 0,
+  "wins": 0,
+  "losses": 0,
+  "expired": 0,
+  "ambiguous": 0,
+  "cancelled": 0,
+  "winRate": null,
+  "resolvedTrades": 0,
+  "avgRr": null,
+  "avgWinR": null,
+  "profitFactor": null,
+  "avgScore": null,
+  "avgTimeToTpMs": null,
+  "avgTimeToSlMs": null,
+  "expectancyR": null,
+  "sharpeR": null,
+  "slippage": {
+    "avgPct": null,
+    "maxPct": null,
+    "fills": 0
+  },
+  "maxWinningStreak": 0,
+  "maxLosingStreak": 0,
+  "maxDrawdownR": null,
+  "monteCarlo": null,
+  "scoreCalibration": {
+    "A+": {
+      "signals": 0,
+      "resolved": 0,
+      "wins": 0,
+      "losses": 0,
+      "winRate": null,
+      "wilson95": {
+        "lower": null,
+        "upper": null
+      }
+    },
+    "A": {
+      "signals": 0,
+      "resolved": 0,
+      "wins": 0,
+      "losses": 0,
+      "winRate": null,
+      "wilson95": {
+        "lower": null,
+        "upper": null
+      }
+    },
+    "B+": {
+      "signals": 0,
+      "resolved": 0,
+      "wins": 0,
+      "losses": 0,
+      "winRate": null,
+      "wilson95": {
+        "lower": null,
+        "upper": null
+      }
+    }
+  },
+  "byDirection": {},
+  "byQuality": {},
+  "byRegime": {},
+  "bySymbol": {},
+  "byScoreRange": {},
+  "window": {
+    "since": null,
+    "until": null,
+    "signalsInWindow": 0
+  },
+  "generatedAt": 1788067003291,
+  "disclaimer": "Win rate = wins / (wins + losses); waiting/expired/ambiguous/cancelled signals are excluded from the denominator. The confluence score is a quality ranking, not a probability. Past performance does not guarantee future results."
+}
