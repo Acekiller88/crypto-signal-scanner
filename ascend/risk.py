@@ -90,8 +90,129 @@ def _rr(direction: str, entry: float, stop: float, target: float) -> float | Non
     return round(numer / denom, 4)
 
 
+def _fvg_for(direction: str, a: dict, last: int) -> "structure.FVG | None":
+    """Most recent confirmed FVG aligned with the trade direction."""
+    f15 = a["frames"]["15"]
+    want = {"long": "bullish", "short": "bearish"}[direction]
+    cands = [f for f in (f15.get("fvgs") or [])
+             if f.direction == want and f.confirmIndex <= last]
+    return cands[-1] if cands else None
+
+
+def _ob_for(direction: str, a: dict, last: int) -> "structure.OrderBlock | None":
+    """Most recent confirmed order block aligned with the trade direction."""
+    f15 = a["frames"]["15"]
+    want = {"long": "bullish", "short": "bearish"}[direction]
+    cands = [o for o in (f15.get("orderBlocks") or [])
+             if o.direction == want and o.confirmIndex <= last]
+    return cands[-1] if cands else None
+
+
+def _default_entry(direction: str, a: dict, cfg, invalidation: float,
+                   atr: float, price: float, lo: int, last: int) -> tuple[float, str]:
+    """Regime-aware fallback entry.
+
+    TREND/MIXED -> 0.5 retracement of the displacement leg (Turtle continuation).
+    RANGE -> mean-revert to the value-area edge (discount VAL for a long,
+    premium VAH for a short), which is the honest counter-trend location.
+    """
+    f15 = a["frames"]["15"]
+    regime = a.get("regime")
+    prof = a.get("profile") or {}
+    if direction == "long":
+        leg_high = max(f15["h"][lo:last + 1])
+        entry_by_retrace = invalidation + 0.5 * (leg_high - invalidation)
+        if regime == "RANGE":
+            val = prof.get("val")
+            if val and invalidation < val < price:
+                return val, "value_area"
+        entry = min(entry_by_retrace, price) if price else entry_by_retrace
+        entry = max(entry, invalidation + 0.25 * atr)
+        entry = min(entry, price - 0.05 * atr)
+        return entry, "retracement"
+    else:
+        leg_low = min(f15["l"][lo:last + 1])
+        entry_by_retrace = invalidation - 0.5 * (invalidation - leg_low)
+        if regime == "RANGE":
+            vah = prof.get("vah")
+            if vah and price < vah < invalidation:
+                return vah, "value_area"
+        entry = max(entry_by_retrace, price) if price else entry_by_retrace
+        entry = min(entry, invalidation - 0.25 * atr)
+        entry = max(entry, price + 0.05 * atr)
+        return entry, "retracement"
+
+
+def _try_setup(direction: str, a: dict, cfg, entry: float, inlet_kind: str,
+               invalidation: float, atr: float, price: float,
+               min_rr: float, pref_rr: float,
+               buf: float, stop_max: float, stop_min: float) -> tuple[Setup | None, str]:
+    """Given a specific entry, build stop + targets and validate ordering/RR."""
+    f15 = a["frames"]["15"]
+    last = a.get("last15mIndex")
+    # entry must sit on the correct side of invalidation and price
+    if direction == "long":
+        if not (invalidation < entry < price):
+            return None, "long entry outside invalidation/price"
+        stop = invalidation - buf * atr
+        if stop >= entry:
+            return None, "long stop not below entry"
+    else:
+        if not (price < entry < invalidation):
+            return None, "short entry outside invalidation/price"
+        stop = invalidation + buf * atr
+        if stop <= entry:
+            return None, "short stop not above entry"
+    stop_dist = abs(entry - stop)
+    if stop_dist < stop_min * atr:
+        stop = entry - stop_min * atr if direction == "long" else entry + stop_min * atr
+        stop_dist = abs(entry - stop)
+    if stop_dist > stop_max * atr:
+        stop = entry - stop_max * atr if direction == "long" else entry + stop_max * atr
+        stop_dist = abs(entry - stop)
+    if stop_dist <= 0:
+        return None, "degenerate stop"
+
+    cands = _liquidity_targets(direction, a, entry, min_rr, pref_rr)
+    chosen1 = chosen2 = None
+    for level, kind in cands:
+        rr = _rr(direction, entry, stop, level)
+        if rr is not None and rr >= min_rr:
+            chosen1 = (level, kind, rr)
+            if rr >= pref_rr:
+                break
+    if chosen1 is None:
+        return None, "no liquidity target funds min RR"
+    target1, t1kind, rr1 = chosen1
+    for level, kind in cands:
+        if (direction == "long" and level > target1) or (direction == "short" and level < target1):
+            chosen2 = (level, kind)
+            break
+    target2, t2kind = chosen2 if chosen2 else (None, None)
+
+    setup = Setup(direction=direction, entry=round(entry, 10),
+                  entryLow=round(min(entry, price), 10), entryHigh=round(max(entry, price), 10),
+                  stop=round(stop, 10), target1=round(target1, 10),
+                  target2=round(target2, 10) if target2 else None,
+                  invalidation=round(invalidation, 10), rr=rr1,
+                  target1Kind=t1kind, target2Kind=t2kind, risk=None, size_units=None,
+                  notes=[f"entry_source={inlet_kind}"])
+    if direction == "long" and not (setup.stop < setup.entry and setup.target1 > setup.entry):
+        return None, "long ordering invalid"
+    if direction == "short" and not (setup.stop > setup.entry and setup.target1 < setup.entry):
+        return None, "short ordering invalid"
+    return setup, ""
+
+
 def build_setup(direction: str, a: dict, cfg) -> tuple[Setup | None, str]:
-    """Build the entry/stop/target for the candidate direction."""
+    """Build the best entry/stop/target for the candidate direction.
+
+    Entry sources are tried in priority order (regime-tiered):
+      TREND/MIXED -> FVG consequent-encroachment > order block > retracement.
+      RANGE       -> value-area mean-revert > FVG > order block > retracement.
+    The first source that yields a valid (ordered, RR-gated) setup wins; so a
+    weak FVG never forces a bad trade -- it falls through to the classic entry.
+    """
     sm = cfg.get("signalModel")
     atr = a.get("atr15m")
     price = a.get("price")
@@ -107,6 +228,7 @@ def build_setup(direction: str, a: dict, cfg) -> tuple[Setup | None, str]:
     last = a.get("last15mIndex")
     window = int(cfg.get("structure.mssWindowBars", 12))
     lo = max(2, last - window)
+    regime = a.get("regime")
 
     sweeps = [s for s in (f15.get("sweeps") or [])
               if s.direction == ("bullish" if direction == "long" else "bearish")
@@ -118,96 +240,56 @@ def build_setup(direction: str, a: dict, cfg) -> tuple[Setup | None, str]:
         invalidation = sweep.level if sweep else None
         if invalidation is None:
             lows = f15["l"]
-            # most recent *confirmed* swing low (nearest structure below) keeps the
-            # stop tight; fall back to the recent window min only if no swing exists.
             recent_swing_lows = [s for s in (f15.get("swingLows") or [])
                                  if s.confirmIndex <= last]
-            if recent_swing_lows:
-                invalidation = max(recent_swing_lows, key=lambda s: s.index).price
-            else:
-                invalidation = min(lows[lo:last + 1])
+            invalidation = (max(recent_swing_lows, key=lambda s: s.index).price
+                            if recent_swing_lows else min(lows[lo:last + 1]))
     else:
         invalidation = sweep.level if sweep else None
         if invalidation is None:
             highs = f15["h"]
             recent_swing_highs = [s for s in (f15.get("swingHighs") or [])
                                   if s.confirmIndex <= last]
-            if recent_swing_highs:
-                invalidation = min(recent_swing_highs, key=lambda s: s.index).price
-            else:
-                invalidation = max(highs[lo:last + 1])
+            invalidation = (min(recent_swing_highs, key=lambda s: s.index).price
+                            if recent_swing_highs else max(highs[lo:last + 1]))
     if invalidation is None or invalidation <= 0:
         return None, "no invalidation"
 
-    # entry = retracement of the displacement leg (default 0.5) OR value-area low
-    if direction == "long":
-        leg_high = max(f15["h"][lo:last + 1])
-        entry_by_retrace = invalidation + 0.5 * (leg_high - invalidation)
-        va_low = (a.get("profile") or {}).get("val")
-        entry = min(entry_by_retrace, price) if price else entry_by_retrace
-        if va_low and invalidation < va_low < price:
-            entry = max(entry, va_low)  # don't go below value-area low
-        # must stay above invalidation and below current price
-        entry = max(entry, invalidation + 0.25 * atr)
-        entry = min(entry, price - 0.05 * atr)
+    # build the candidate list, tiered by regime
+    candidates: list[tuple[float, str]] = []
+    fvg = _fvg_for(direction, a, last)
+    ob = _ob_for(direction, a, last)
+    default = _default_entry(direction, a, cfg, invalidation, atr, price, lo, last)
+
+    if regime == "RANGE":
+        # mean-revert first, then FVG/OB, then the classic retracement
+        if default[1] == "value_area":
+            candidates.append(default)
+        if fvg:
+            candidates.append((fvg.mid, "fvg"))
+        if ob:
+            candidates.append((ob.mid, "order_block"))
+        if default[1] != "value_area":
+            candidates.append(default)
     else:
-        leg_low = min(f15["l"][lo:last + 1])
-        entry_by_retrace = invalidation - 0.5 * (invalidation - leg_low)
-        va_high = (a.get("profile") or {}).get("vah")
-        entry = max(entry_by_retrace, price) if price else entry_by_retrace
-        if va_high and price < va_high < invalidation:
-            entry = min(entry, va_high)
-        entry = min(entry, invalidation - 0.25 * atr)
-        entry = max(entry, price + 0.05 * atr)
-    if entry <= 0 or invalidation <= 0:
-        return None, "non-positive levels"
+        # TREND / MIXED: location-first (FVG/OB) then continuation retracement
+        if fvg:
+            candidates.append((fvg.mid, "fvg"))
+        if ob:
+            candidates.append((ob.mid, "order_block"))
+        candidates.append(default)
 
-    # stop
-    if direction == "long":
-        stop = invalidation - buf * atr
-    else:
-        stop = invalidation + buf * atr
-    stop_dist = abs(entry - stop)
-    if stop_dist < stop_min * atr:
-        stop = entry - stop_min * atr if direction == "long" else entry + stop_min * atr
-        stop_dist = abs(entry - stop)
-    if stop_dist > stop_max * atr:
-        stop = entry - stop_max * atr if direction == "long" else entry + stop_max * atr
-        stop_dist = abs(entry - stop)
-    if stop_dist <= 0:
-        return None, "degenerate stop"
-
-    # targets
-    cands = _liquidity_targets(direction, a, entry, min_rr, pref_rr)
-    chosen1 = None
-    chosen2 = None
-    for level, kind in cands:
-        rr = _rr(direction, entry, stop, level)
-        if rr is not None and rr >= min_rr:
-            chosen1 = (level, kind, rr)
-            if rr >= pref_rr:
-                break
-    if chosen1 is None:
-        return None, "no liquidity target funds min RR"
-    target1, t1kind, rr1 = chosen1
-    # second target = next candidate beyond target1
-    for level, kind in cands:
-        if (direction == "long" and level > target1) or (direction == "short" and level < target1):
-            chosen2 = (level, kind)
-            break
-    target2, t2kind = chosen2 if chosen2 else (None, None)
-
-    setup = Setup(direction=direction, entry=round(entry, 10),
-                  entryLow=round(min(entry, price), 10), entryHigh=round(max(entry, price), 10),
-                  stop=round(stop, 10), target1=round(target1, 10),
-                  target2=round(target2, 10) if target2 else None,
-                  invalidation=round(invalidation, 10), rr=rr1,
-                  target1Kind=t1kind, target2Kind=t2kind, risk=None, size_units=None)
-    if direction == "long" and not (setup.stop < setup.entry and setup.target1 > setup.entry):
-        return None, "long ordering invalid"
-    if direction == "short" and not (setup.stop > setup.entry and setup.target1 < setup.entry):
-        return None, "short ordering invalid"
-    return setup, ""
+    # try candidates in priority order; first valid wins
+    tried: set[float] = set()
+    for entry, kind in candidates:
+        if entry <= 0 or entry in tried:
+            continue
+        tried.add(entry)
+        setup, reason = _try_setup(direction, a, cfg, entry, kind, invalidation,
+                                   atr, price, min_rr, pref_rr, buf, stop_max, stop_min)
+        if setup is not None:
+            return setup, ""
+    return None, "no candidate entry funds min RR"
 
 
 def size_position(setup: Setup, account_equity: float, contract_value: float,

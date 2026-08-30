@@ -91,6 +91,19 @@ const pct = (n, d=2) => (n===null||n===undefined||Number.isNaN(+n)) ? "—" : (+
 const ts = (ms) => ms ? new Date(ms).toISOString().replace("T"," ").slice(0,19)+"Z" : "—";
 const esc = (s) => String(s??"").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
+function exitPlanHTML(s){
+  const ep = s.exitPlan;
+  if(!ep) return "";
+  const frac = ep.partial?.fraction ?? 0;
+  const part = (Math.round((1-frac)*100)) + "%/" + (Math.round(frac*100)) + "%@" + (ep.partial?.atR ?? "-") + "R";
+  const be = "@" + (ep.breakeven?.atR ?? "-") + "R";
+  const trail = (ep.trail?.atrMultiple ?? "-") + "\u00b7ATR";
+  const ts = (ep.timeStop?.bars ?? "-") + " bars";
+  return `<div class="meta" style="margin-top:4px">
+    exit: break-even ${be} · partial ${part} · trail ${trail} · time-stop ${ts}
+  </div>`;
+}
+
 async function loadJSON(name){ try{ const r=await fetch(`data/${name}?t=${Date.now()}`,{cache:"no-store"}); return await r.json(); }catch(e){ return null; } }
 function chip(label, cls){ return `<span class="chip ${cls}">${esc(label)}</span>`; }
 
@@ -131,9 +144,12 @@ async function render(){
       <div class="bar"><i style="width:${Math.min(100,sc)}%"></i></div>
       <div class="meta" style="margin-top:8px">
         regime ${esc(s.regime)} · 1D ${esc(s.bias1d)} / 4H ${esc(s.bias4h)} ·
-        entry ${fmt(s.entry)} · SL ${fmt(s.stop)} · TP1 ${fmt(s.target1)}${s.target2?(" · TP2 "+fmt(s.target2)):""} ·
-        value ${esc(s.valuePosition)} · candle ${ts(s.signalCandleCloseTime)}
+        entry ${fmt(s.entry)} (${esc(s.entrySource||"—")}) · SL ${fmt(s.stop)} ·
+        TP1 ${fmt(s.target1)}${s.target2?(" · TP2 "+fmt(s.target2)):""} ·
+        value ${esc(s.valuePosition)}
       </div>
+      ${exitPlanHTML(s)}
+      <div class="meta">candle ${ts(s.signalCandleCloseTime)}</div>
     </div>`;
   }).join("");
 

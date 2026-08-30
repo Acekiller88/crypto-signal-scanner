@@ -54,6 +54,34 @@ class Sweep:
     wick: float
 
 
+@dataclass
+class FVG:
+    index: int           # the (closed) candle whose LOW/HIGH creates the gap
+    confirmIndex: int    # = index: the gap is only known once candle `index` closes
+    direction: str       # 'bullish' | 'bearish'
+    bottom: float        # gap floor  (bullish: high[i-2])
+    top: float           # gap ceiling (bullish: low[i])
+    mid: float           # consequent-encroachment entry = midpoint of the gap
+
+    @property
+    def label(self) -> str:
+        return "fvg"
+
+
+@dataclass
+class OrderBlock:
+    index: int           # the (closed) candle that is the OB
+    confirmIndex: int    # = the displacement/structure-break candle that validates it
+    direction: str       # 'bullish' | 'bearish'
+    bottom: float
+    top: float
+    mid: float           # consequent-encroachment entry
+
+    @property
+    def label(self) -> str:
+        return "order_block"
+
+
 def find_swing_highs(highs: list[float], k: int = 2) -> list[Swing]:
     out: list[Swing] = []
     n = len(highs)
@@ -93,6 +121,78 @@ def find_displacements(opens: list[float], closes: list[float],
         if body >= body_atr_multiple * a and body > 0:
             out.append(Displacement(i, "bullish" if closes[i] > opens[i] else "bearish",
                                     round(body / a, 4)))
+    return out
+
+
+def find_fvgs(highs: list[float], lows: list[float],
+              atr_series: list[Optional[float]],
+              min_gap_atr_multiple: float = 0.5) -> list[FVG]:
+    """Detect Fair Value Gaps (3-candle imbalances), causal & non-repaint.
+
+    A bullish FVG exists at candle ``i`` when ``low[i] > high[i-2]`` (candle 3's
+    low leaves a gap above candle 1's high); the zone is
+    [high[i-2], low[i]]. The bearish mirror is ``high[i] < low[i-2]``. The gap
+    is only known once candle ``i`` *closes*, so ``confirmIndex == i``.
+
+    Only gaps at least ``min_gap_atr_multiple * ATR(i)`` wide are kept -- a
+    sub-pip sliver is not a real imbalance.
+    """
+    out: list[FVG] = []
+    n = len(highs)
+    for i in range(2, n):
+        atr_v = atr_series[i] or 0.0
+        min_gap = min_gap_atr_multiple * max(atr_v, 1e-12)
+        bullish_gap = lows[i] - highs[i - 2]
+        if bullish_gap > 0 and bullish_gap >= min_gap:
+            bottom, top = highs[i - 2], lows[i]
+            out.append(FVG(i, i, "bullish", round(bottom, 10), round(top, 10),
+                           round((bottom + top) / 2.0, 10)))
+            continue
+        bearish_gap = lows[i - 2] - highs[i]
+        if bearish_gap > 0 and bearish_gap >= min_gap:
+            bottom, top = highs[i], lows[i - 2]
+            out.append(FVG(i, i, "bearish", round(bottom, 10), round(top, 10),
+                           round((bottom + top) / 2.0, 10)))
+    return out
+
+
+def find_order_blocks(opens: list[float], closes: list[float],
+                      highs: list[float], lows: list[float],
+                      displacements: list[Displacement],
+                      window: int = 6) -> list[OrderBlock]:
+    """Detect Order Blocks: the last *opposite* candle before each displacement.
+
+    A bullish OB is the most recent bearish candle immediately preceding a
+    bullish displacement/structure break; price is expected to retrace into it
+    (consequent encroachment) before continuation. The OB is only *usable* once
+    the validating displacement candle closes, so ``confirmIndex == d.index``.
+
+    Deterministic, causal, non-repaint. Multiple displacements may share the
+    same OB candle; duplicates are collapsed to the last one per candle.
+    """
+    out: list[OrderBlock] = []
+    seen: set[int] = set()
+    for d in displacements:
+        lo = max(0, d.index - window)
+        ob_idx: int | None = None
+        # scan backwards, biased to pick the *closest* opposite candle to the move
+        for j in range(d.index - 1, lo - 1, -1):
+            if d.direction == "bullish" and closes[j] < opens[j]:   # bearish candle
+                ob_idx = j
+                break
+            if d.direction == "bearish" and closes[j] > opens[j]:   # bullish candle
+                ob_idx = j
+                break
+        if ob_idx is None or ob_idx in seen:
+            continue
+        seen.add(ob_idx)
+        if d.direction == "bullish":
+            bottom, top = lows[ob_idx], max(highs[ob_idx], opens[ob_idx], closes[ob_idx])
+        else:
+            bottom, top = min(lows[ob_idx], opens[ob_idx], closes[ob_idx]), highs[ob_idx]
+        out.append(OrderBlock(ob_idx, d.index, d.direction, round(bottom, 10),
+                              round(top, 10), round((bottom + top) / 2.0, 10)))
+    out.sort(key=lambda x: x.confirmIndex)
     return out
 
 

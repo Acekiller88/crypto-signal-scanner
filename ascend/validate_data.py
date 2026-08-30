@@ -26,6 +26,24 @@ def validate_signal_row(row: dict) -> list[str]:
         errs.append(f"unknown label {row.get('label')}")
     if row.get("direction") not in ("LONG", "SHORT"):
         errs.append("direction invalid")
+    if row.get("entrySource") not in (None, "fvg", "order_block", "retracement", "value_area"):
+        errs.append(f"unknown entrySource {row.get('entrySource')}")
+    ep = row.get("exitPlan")
+    if ep:
+        entry, t1 = row.get("entry"), row.get("target1")
+        for key in ("breakeven", "partial"):
+            if ep[key]["atR"] <= 0:
+                errs.append(f"exitPlan.{key}.atR must be > 0")
+        be_p, pa_p = ep["breakeven"]["price"], ep["partial"]["price"]
+        # breakeven/partial must land inside the entry..target1 corridor
+        if row.get("direction") == "LONG":
+            if not (entry < be_p <= t1 and entry < pa_p <= t1):
+                errs.append("exitPlan breakeven/partial outside entry..target1")
+        else:
+            if not (t1 <= be_p < entry and t1 <= pa_p < entry):
+                errs.append("exitPlan breakeven/partial outside entry..target1")
+        if not (0 < ep["partial"]["fraction"] <= 1):
+            errs.append("exitPlan partial fraction out of (0,1]")
     # level ordering
     if row.get("direction") == "LONG":
         if not (row["stop"] < row["entry"] < row["target1"]):

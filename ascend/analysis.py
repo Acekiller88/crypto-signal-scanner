@@ -144,6 +144,8 @@ def analyze_symbol(symbol: str, klines: dict[str, list], cfg: Config,
                 scfg.get("minSwingAgeBars"), scfg.get("sweepMaxAtrMultiple"))
             frames[tf]["equalHighs"] = st.equal_levels(swings_hi, atr_s, scfg.get("equalLevelAtrTolerance"))
             frames[tf]["equalLows"] = st.equal_levels(swings_lo, atr_s, scfg.get("equalLevelAtrTolerance"))
+            frames[tf]["fvgs"] = st.find_fvgs(h, l, atr_s, scfg.get("fvgMinAtrMultiple", 0.5))
+            frames[tf]["orderBlocks"] = st.find_order_blocks(o, c, h, l, disps, scfg.get("obWindowBars", 6))
             frames[tf]["profile"] = prof.build_profile(
                 c, h, l, v, pcfg.get("valueAreaPct", 0.70), pcfg.get("rows", 48))
 

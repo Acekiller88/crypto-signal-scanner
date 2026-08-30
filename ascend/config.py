@@ -54,6 +54,8 @@ DEFAULTS: dict[str, Any] = {
         "equalLevelAtrTolerance": 0.1,
         "maxStructureSwings": 40,
         "mssWindowBars": 12,           # lookback for the reversing MSS
+        "fvgMinAtrMultiple": 0.5,      # min FVG gap width as a multiple of ATR
+        "obWindowBars": 6,             # how far back to look for the OB candle
     },
     "profile": {
         "valueAreaPct": 0.70,
@@ -72,7 +74,10 @@ DEFAULTS: dict[str, Any] = {
         "stopMinAtrMultiple": 1.0,
         "stopBufferAtrMultiple": 0.5,
         "timeStopBars": 24,            # exit if < +0.5R within N 15M bars
-        "breakevenAtR": 1.0,
+        "breakevenAtR": 1.0,           # move stop to entry at this R
+        "partialAtR": 1.0,             # take partial profit at this R
+        "partialFraction": 0.5,        # fraction of units to trim at partialAtR
+        "trailAtrMultiple": 0.5,       # trail stop 0.5*ATR beyond structure
     },
     "scoring": {
         "weights": {"trend": 0.20, "structure": 0.20, "liquidity": 0.15,

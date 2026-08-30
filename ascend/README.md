@@ -31,12 +31,36 @@ scorecards and risk/setup levels; execution is out of scope by design.
 | `analysis.py` | Multi-TF snapshot: biases, regime, per-frame indicators, structure, profile. |
 | `risk.py` | Entry/stop/target (RR), ATR-buffer invalidation, buffer-based sizing. |
 | `scoring.py` | 7 sub-scores → weighted 0–100 → logistic P(≥1R) → direction-aware label. |
-| `signal.py` | Evaluate both sides, pick the better, build the scorecard + signal row. |
+| `signal.py` | Evaluate both sides, pick the better, build the scorecard + signal row + exit plan. |
+| `structure.py` | Also detects **FVG** (3-candle imbalance) and **order blocks** (the last opposite candle before a displacement). |
 | `engine.py` | Scan orchestrator: universe → klines → analyze → evaluate → persist. |
 | `sessions.py` | ICT kill-zone weighting (display/context). |
 | `persist.py` | Atomic JSON writes to `/data`, mirrored to `/frontend/data`. |
 | `validate_data.py` | CI JSON integrity checker. |
 | `main.py` | CLI (`python -m ascend.main`). |
+
+## Entry model (regime-adaptive)
+
+`risk.build_setup` tries entry candidates in priority order and keeps the first
+that yields a valid, R:R-gated setup:
+
+| Regime | Entry priority |
+|---|---|
+| **TREND / MIXED** | FVG consequent-encroachment → order block → 0.5 displacement retracement |
+| **RANGE** | value-area mean-revert (discount VAL for long / premium VAH for short) → FVG → order block → retracement |
+
+A weak FVG never forces a bad trade — if it can't fund the minimum R:R it falls
+through to the classic continuation entry. The chosen source is recorded in
+`setup.entrySource` (`fvg` / `order_block` / `retracement` / `value_area`).
+
+## Managed exit plan
+
+Every published setup also carries an `exitPlan` (Turtle + prop discipline):
+
+* **breakeven** — move the stop to entry at `+1R`.
+* **partial** — trim `partialFraction` at `partialAtR`.
+* **trail** — trail `trailAtrMultiple`·ATR beyond the most recent confirmed structure.
+* **timeStop** — exit if not beyond breakeven within `timeStopBars` 15M bars.
 
 ## Hard non-repaint guarantees
 

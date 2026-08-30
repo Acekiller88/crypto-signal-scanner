@@ -305,6 +305,203 @@ class TestOrchestrator:
         assert status.get("lastSuccessfulScan") == 1
 
 
+# ---------------------------------------------------------------- structure: FVG & OB
+class TestFVGAndOB:
+    def test_find_fvgs_bullish(self):
+        highs = [10.0, 15.0, 16.0, 17.0, 18.0, 19.0]
+        lows = [9.0, 11.0, 12.0, 13.0, 14.0, 15.0]
+        atrs = [1.0] * 6
+        fvgs = st.find_fvgs(highs, lows, atrs, 0.5)
+        bulls = [f for f in fvgs if f.direction == "bullish"]
+        # candle 2 low(12) > candle 0 high(10) -> bullish gap [10, 12], mid 11
+        assert any(f.index == 2 and f.bottom == 10 and f.top == 12 and f.mid == 11
+                   for f in bulls)
+        # confirmIndex == index (only known at close of the 3rd candle)
+        for f in fvgs:
+            assert f.confirmIndex == f.index
+
+    def test_find_fvgs_bearish(self):
+        highs = [16.0, 12.0, 11.0, 10.0, 9.0, 8.0]
+        lows = [14.0, 9.0, 8.0, 7.0, 6.0, 5.0]
+        atrs = [1.0] * 6
+        fvgs = st.find_fvgs(highs, lows, atrs, 0.5)
+        bears = [f for f in fvgs if f.direction == "bearish"]
+        # candle 2 high(11) < candle 0 low(14) -> bearish gap [11, 14]
+        assert any(f.index == 2 and f.bottom == 11 and f.top == 14 for f in bears)
+
+    def test_find_fvgs_filters_small_gaps(self):
+        highs = [10.0, 10.2, 10.4, 10.5, 10.6]
+        lows = [9.0, 9.1, 9.3, 9.4, 9.5]
+        atrs = [10.0] * 5  # huge ATR -> min gap = 5.0, no FVG qualifies
+        assert st.find_fvgs(highs, lows, atrs, 0.5) == []
+
+    def test_find_order_blocks_bullish(self):
+        # bullish OB = last bearish candle before a bullish displacement
+        opens  = [10.0, 10.5, 10.2, 10.0, 11.0, 12.5]
+        closes = [10.5, 10.1, 10.4, 11.2, 13.0, 14.0]   # idx3 bearish-> close<open? index3 close10.4? redo
+        # force: idx2 is a bearish candle (close<open) preceding the bullish move
+        opens  = [10.0, 10.2, 10.4, 10.1, 10.8, 11.6]
+        closes = [10.2, 10.0, 10.1, 10.6, 11.4, 12.2]   # idx2 close(10.1) < open(10.4) => bearish
+        highs  = [10.3, 10.3, 10.5, 10.7, 11.5, 12.3]
+        lows   = [9.9, 9.8, 9.9, 10.0, 10.7, 11.5]
+        disps = [st.Displacement(4, "bullish", 2.0)]
+        obs = st.find_order_blocks(opens, closes, highs, lows, disps, window=6)
+        assert len(obs) == 1
+        assert obs[0].index == 2          # the bearish candle before the move
+        assert obs[0].direction == "bullish"
+        assert obs[0].confirmIndex == 4   # usable only after the displacement closes
+
+    def test_find_order_blocks_mirror_bearish(self):
+        opens  = [10.8, 10.6, 10.2, 10.4, 10.6, 10.8]
+        closes = [10.6, 10.8, 10.4, 10.2, 10.0, 9.8]    # idx2 close(10.4) > open(10.2) => bullish
+        highs  = [10.9, 10.9, 10.5, 10.5, 10.3, 10.1]
+        lows   = [10.5, 10.5, 10.1, 10.0, 9.8, 9.6]
+        disps = [st.Displacement(4, "bearish", 2.0)]
+        obs = st.find_order_blocks(opens, closes, highs, lows, disps, window=6)
+        assert len(obs) == 1
+        assert obs[0].index == 2
+        assert obs[0].direction == "bearish"
+
+
+# ---------------------------------------------------------------- risk: regime / entry source
+def _entry_source(setup):
+    return next((n.split("=", 1)[1] for n in setup.notes if n.startswith("entry_source=")), None) if setup else None
+
+
+class TestRegimeAdaptiveEntry:
+    def _craft(self, cfg, regime="TREND", val=95.0, vah=120.0, **frame_overrides):
+        """A minimal analysis dict where a bullish FVG sits above invalidation."""
+        from ascend.structure import Swing, FVG
+        swing_low = Swing(index=8, confirmIndex=10, price=100.0, kind="low")
+        swing_high = Swing(index=11, confirmIndex=13, price=130.0, kind="high")
+        fvg = FVG(index=12, confirmIndex=12, direction="bullish",
+                  bottom=105.0, top=107.0, mid=106.0)
+        frames = {
+            "15": {
+                "h": [104, 106, 103, 105, 107, 109, 108, 110, 103, 101, 102, 104, 106, 108, 114, 125],
+                "l": [100, 102, 100, 102, 103, 105, 104, 106, 100, 98, 99, 100, 101, 103, 110, 108],
+                "c": [102, 105, 102, 104, 106, 108, 107, 109, 102, 100, 101, 103, 105, 107, 113, 110],
+                "swingLows": [swing_low], "swingHighs": [swing_high],
+                "sweeps": [], "events": [], "equalHighs": [], "equalLows": [],
+                "fvgs": [fvg], "orderBlocks": [],
+            }
+        }
+        frames["15"].update(frame_overrides)
+        return {
+            "symbol": "T", "price": 110.0, "atr15m": 2.0, "regime": regime,
+            "last15mIndex": 15,
+            "profile": {"val": val, "vah": vah, "poc": 108.0, "valuePosition": "at_value"},
+            "frames": frames,
+        }
+
+    def test_build_setup_prefers_fvg_entry(self, cfg):
+        a = self._craft(cfg, regime="TREND")
+        setup, reason = rk.build_setup("long", a, cfg)
+        assert setup is not None, reason
+        assert _entry_source(setup) == "fvg"
+        assert setup.stop < setup.entry < setup.target1
+        assert setup.entry == pytest.approx(106.0)  # the FVG mid
+
+    def test_order_block_used_when_fvg_missing(self, cfg):
+        from ascend.structure import Swing, OrderBlock
+        swing_low = Swing(index=8, confirmIndex=10, price=100.0, kind="low")
+        swing_high = Swing(index=11, confirmIndex=13, price=130.0, kind="high")
+        ob = OrderBlock(index=9, confirmIndex=12, direction="bullish",
+                        bottom=103.0, top=105.0, mid=104.0)
+        a = self._craft(cfg, regime="TREND", fvgs=[], orderBlocks=[ob],
+                        swingLows=[swing_low], swingHighs=[swing_high])
+        # price is 110, OB mid 104 must be > invalidation(100) -> valid
+        setup, reason = rk.build_setup("long", a, cfg)
+        assert setup is not None, reason
+        assert _entry_source(setup) == "order_block"
+
+    def test_range_routes_to_value_area(self, cfg):
+        from ascend.structure import Swing, FVG
+        swing_low = Swing(index=8, confirmIndex=10, price=100.0, kind="low")
+        swing_high = Swing(index=11, confirmIndex=13, price=130.0, kind="high")
+        fvg = FVG(index=12, confirmIndex=12, direction="bullish",
+                  bottom=105.0, top=107.0, mid=106.0)
+        a = self._craft(cfg, regime="RANGE", val=104.0, vah=120.0,
+                        swingLows=[swing_low], swingHighs=[swing_high], fvgs=[fvg],
+                        orderBlocks=[])
+        # With a RANGE regime and discount VAL=104 (above invalidation 100, below
+        # price 110), the value-area mean-revert is tried first -> value_area.
+        setup, reason = rk.build_setup("long", a, cfg)
+        assert setup is not None, reason
+        assert _entry_source(setup) == "value_area"
+
+    def test_synthetic_long_market_produces_exit_plan(self, cfg, now_ms):
+        a = analysis.analyze_symbol("T", _long_frames(), cfg, now_ms)
+        setup, reason = rk.build_setup("long", a, cfg)
+        assert setup is not None, reason
+        assert any(n.startswith("entry_source=") for n in setup.notes)
+        assert setup.stop < setup.entry < setup.target1
+
+
+# ---------------------------------------------------------------- signal: exit plan
+class TestExitPlan:
+    def test_exit_plan_levels_and_order(self, cfg, now_ms):
+        a = analysis.analyze_symbol("T", _long_frames(), cfg, now_ms)
+        ev = evaluate_symbol(a, cfg)
+        setup = ev["setup"]
+        assert setup is not None
+        ep = setup["exitPlan"]
+        assert ep is not None
+        assert ep["breakeven"]["atR"] == cfg.get("signalModel.breakevenAtR", 1.0)
+        assert ep["timeStop"]["bars"] == cfg.get("signalModel.timeStopBars", 24)
+        # for LONG, breakeven and partial prices sit above the entry
+        assert ep["breakeven"]["price"] > setup["entry"]
+        assert ep["partial"]["price"] > setup["entry"]
+        assert ep["trail"]["atrMultiple"] == cfg.get("signalModel.trailAtrMultiple", 0.5)
+
+    def test_signal_row_carries_exit_plan(self, cfg, now_ms):
+        a = analysis.analyze_symbol("T", _long_frames(), cfg, now_ms)
+        ev = evaluate_symbol(a, cfg)
+        from ascend.signal import to_signal_row
+        row = to_signal_row(ev, cfg)
+        assert row is not None
+        assert "exitPlan" in row and row["exitPlan"] is not None
+        assert row["entrySource"] in ("fvg", "order_block", "retracement", "value_area")
+
+
+class TestValidator:
+    def test_valid_row_has_no_errors(self):
+        from ascend.validate_data import validate_signal_row
+        row = {"symbol": "BTCUSDT", "score": 75.4, "prob": 0.72, "label": "Strong Buy",
+               "direction": "LONG", "entry": 100, "stop": 95, "target1": 115,
+               "entrySource": "fvg",
+               "exitPlan": {"breakeven": {"atR": 1.0, "price": 105},
+                            "partial": {"atR": 1.0, "fraction": 0.5, "price": 105},
+                            "trail": {"atrMultiple": 0.5, "offset": 1.0, "structureLevel": 101},
+                            "timeStop": {"bars": 24}, "stopPrice": 95}}
+        assert validate_signal_row(row) == []
+
+    def test_bad_exit_plan_fraction_flags(self):
+        from ascend.validate_data import validate_signal_row
+        row = {"symbol": "BTCUSDT", "score": 75.4, "prob": 0.72, "label": "Strong Buy",
+               "direction": "LONG", "entry": 100, "stop": 95, "target1": 115,
+               "entrySource": "bad_source",
+               "exitPlan": {"breakeven": {"atR": 1.0, "price": 105},
+                            "partial": {"atR": 1.0, "fraction": 0, "price": 105},
+                            "trail": {"atrMultiple": 0.5, "offset": 1.0, "structureLevel": 101},
+                            "timeStop": {"bars": 24}, "stopPrice": 95}}
+        errs = validate_signal_row(row)
+        assert any("entrySource" in e for e in errs)
+        assert any("fraction" in e for e in errs)
+
+    def test_bad_exit_plan_corridor_flags(self):
+        from ascend.validate_data import validate_signal_row
+        row = {"symbol": "BTCUSDT", "score": 75.4, "prob": 0.72, "label": "Strong Buy",
+               "direction": "LONG", "entry": 100, "stop": 95, "target1": 115,
+               "entrySource": "retracement",
+               "exitPlan": {"breakeven": {"atR": 1.0, "price": 90},
+                            "partial": {"atR": 1.0, "fraction": 0.5, "price": 105},
+                            "trail": {"atrMultiple": 0.5, "offset": 1.0, "structureLevel": 101},
+                            "timeStop": {"bars": 24}, "stopPrice": 95}}
+        errs = validate_signal_row(row)
+        assert any("outside entry..target1" in e for e in errs)
+
+
 # ---------------------------------------------------------------- calibration
 class TestCalibrate:
     def test_fit_missing_variety_returns_prior(self, cfg):

@@ -515,6 +515,9 @@ places an order.
 | Indicators (no-lookahead) | `ascend/indicators.py` | ✅ |
 | Volume profile (POC/VA/HVN/LVN) | `ascend/profile.py` | ✅ deterministic, causal |
 | Structure (swings/BOS/MSS/sweep) | `ascend/structure.py` | ✅ causal, displacement-gated |
+| FVG + Order-Block detection | `ascend/structure.py` | ✅ 3-candle imbalance + last-opposite-candle OB, causal |
+| Regime-adaptive entry selection | `ascend/risk.py` | ✅ FVG/OB/retracement (trend) vs value-area mean-revert (range), falls through on weak RR |
+| Managed exit plan (BE/partial/trail/time-stop) | `ascend/signal.py` | ✅ per-setup `exitPlan` |
 | Multi-TF analysis (D/240/15) | `ascend/analysis.py` | ✅ biases + regime classify |
 | Risk engine (entry/stop/target, RR) | `ascend/risk.py` | ✅ structure-based, buffer sizing |
 | Scoring (7 components → 0–100) | `ascend/scoring.py` | ✅ weighted |
