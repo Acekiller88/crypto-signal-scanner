@@ -46,6 +46,49 @@ ACTIVE_STATUSES = (WAITING_TRIGGER, TRIGGERED)
 RESOLVED_STATUSES = (WIN, LOSS)
 
 
+# --------------------------------------------------------------- rejection
+# Every rejection carries a STABLE code plus a human-readable detail.
+#
+# Why: reason strings used to embed live float values ("relVol 0.83 < min",
+# "RSI 42.2 outside [45,74]"), so the per-scan reject histogram had ~69 unique
+# keys for 200 evaluations -- unaggregatable, unbounded in cardinality, and it
+# churned system-status.json on every scan. Codes are a closed set; the detail
+# stays for humans reading the log.
+#
+# The ORDER of this tuple is the order the gates are evaluated in, which makes
+# it a genuine funnel: each stage only sees what survived the previous one.
+REJECT_STAGES = (
+    "data_incomplete",
+    "htf_conflict",
+    "htf_not_aligned",
+    "bias1d_conflict",
+    "regime_ranging",
+    "volatility_out_of_band",
+    "momentum_adx_low",
+    "momentum_rsi_out_of_band",
+    "volume_thin",
+    "no_liquidity_sweep",
+    "no_structure_event",
+    "no_displacement",
+    "no_fvg_or_order_block",
+    "late_entry",
+    "risk_model_rejected",
+    "entry_blocked_by_structure",
+    "funding_extreme",
+    "score_below_threshold",
+    "rr_below_min",
+    "duplicate_active",
+    "symbol_cooldown",
+    "duplicate_setup_hash",
+    "max_active_signals",
+)
+
+
+def _reject(code: str, detail: str = "") -> dict:
+    """Build a rejection record with a stable, aggregatable code."""
+    return {"code": code, "detail": detail or code}
+
+
 def setup_hash(symbol: str, direction: str, trigger: float, stop: float, target: float) -> str:
     payload = f"{symbol}|{direction}|{trigger:.6f}|{stop:.6f}|{target:.6f}"
     return hashlib.sha1(payload.encode()).hexdigest()
@@ -54,16 +97,6 @@ def setup_hash(symbol: str, direction: str, trigger: float, stop: float, target:
 def signal_id(symbol: str, direction: str, generated_ms: int, trigger: float) -> str:
     payload = f"{symbol}|{direction}|{generated_ms}|{trigger:.8f}"
     return "SIG-" + hashlib.sha1(payload.encode()).hexdigest()[:10]
-
-
-def _last_index(items, lo: int, hi: int, predicate) -> Optional[int]:
-    """Most recent index in [lo, hi] satisfying predicate, or None."""
-    for i in range(hi, lo - 1, -1):
-        if i < 0:
-            continue
-        if predicate(items[i]):
-            return i
-    return None
 
 
 def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Optional[dict], list[str]]:
@@ -76,7 +109,7 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
     reasons: list[str] = []
     ctx = ctx or {}
     if not a.get("ok"):
-        return None, ["data insufficient"]
+        return None, [_reject("data_incomplete", "data insufficient")]
     bull = direction == "long"
     f15 = a["frames"]["15m"]
     n = a["last15mIndex"]
@@ -89,31 +122,31 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
     # ---- required indicator values exist (rule 10/14: missing data)
     for key in ("rsi", "adx", "atr", "relVolume", "atrPercent"):
         if a.get(key) is None:
-            return None, [f"{key} missing"]
+            return None, [_reject("data_incomplete", f"{key} missing")]
     if atr <= 0:
-        return None, ["atr invalid"]
+        return None, [_reject("data_incomplete", "atr invalid")]
 
     # ---- 4H / 1H regime gates (rule 1: strong conflict)
     b4, b1 = a["bias4h"]["bias"], a["bias1h"]["bias"]
     want, opposite = (BULLISH, BEARISH) if bull else (BEARISH, BULLISH)
     if b4 in opposite and b1 in opposite:
-        return None, ["HTF conflict (4H+1H oppose)"]
+        return None, [_reject("htf_conflict", f"HTF conflict (4H={b4},1H={b1})")]
     htf_ok = (b4 in want) or (b4 == "neutral" and b1 == ("strong_bullish" if bull else "strong_bearish"))
     ltf_ok = (b1 in want) or (b1 == "neutral" and b4 == ("strong_bullish" if bull else "strong_bearish"))
     if not (htf_ok and ltf_ok):
-        return None, [f"HTF not aligned (4H={b4},1H={b1})"]
+        return None, [_reject("htf_not_aligned", f"HTF not aligned (4H={b4},1H={b1})")]
     b1d = (a.get("bias1d") or {}).get("bias", "unknown")
     if cfg.get("bias1d.requireAlignment", False) and b1d != "unknown":
         opposite1d = ("strong_bearish", "bearish") if bull else ("strong_bullish", "bullish")
         if b1d in opposite1d:
-            return None, [f"1D bias conflicts ({b1d})"]
+            return None, [_reject("bias1d_conflict", f"1D bias conflicts ({b1d})")]
 
     # ---- regime + volatility + momentum + volume gates (rules 3,4,5)
     if a["regime"] == "RANGING":
-        return None, ["4H regime RANGING"]
+        return None, [_reject("regime_ranging", "4H regime RANGING")]
     atr_pct = a["atrPercent"]
     if not (model.get("minAtrPercent", 0.1) <= atr_pct <= model.get("maxAtrPercent", 3.0)):
-        return None, [f"volatility out of band ({atr_pct:.3f}%)"]
+        return None, [_reject("volatility_out_of_band", f"volatility out of band ({atr_pct:.3f}%)")]
     # ADX gate: trend either *established* (ADX >= min) or *emerging*
     # (directional index aligned and ADX rising) -- reversals legitimately
     # start with low ADX right after a CHoCH.
@@ -125,31 +158,30 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
     di_spread = abs((a.get("plusDi") or 0) - (a.get("minusDi") or 0))
     adx_ok = (a["adx"] >= min_adx) or (di_aligned and (adx_rising or di_spread >= 3.0))
     if not adx_ok:
-        return None, [f"ADX {a['adx']:.1f} < min and not emerging"]
+        return None, [_reject("momentum_adx_low", f"ADX {a['adx']:.1f} < {min_adx} and not emerging")]
     rsi_lo, rsi_hi = (model.get("rsiLongMin", 50), model.get("rsiLongMax", 72)) if bull \
         else (model.get("rsiShortMin", 28), model.get("rsiShortMax", 50))
     if not (rsi_lo <= a["rsi"] <= rsi_hi):
-        return None, [f"RSI {a['rsi']:.1f} outside [{rsi_lo},{rsi_hi}]"]
+        return None, [_reject("momentum_rsi_out_of_band", f"RSI {a['rsi']:.1f} outside [{rsi_lo},{rsi_hi}]")]
     if a["relVolume"] < model.get("minRelVolume", 1.2):
-        return None, [f"relVol {a['relVolume']:.2f} < min"]
+        return None, [_reject("volume_thin", f"relVol {a['relVolume']:.2f} < {model.get('minRelVolume', 1.2)}")]
 
     # ---- 15M sequence: sweep -> CHoCH/BOS -> displacement (rules via model)
     sweeps = [s for s in f15["sweeps"]
               if s.direction == ("bullish" if bull else "bearish") and lo <= s.index <= n]
     if not sweeps:
-        return None, ["no liquidity sweep in window"]
+        return None, [_reject("no_liquidity_sweep", "no liquidity sweep in window")]
     sweep = sweeps[-1]
     ev_types = ("CHoCH_up", "BOS_up") if bull else ("CHoCH_down", "BOS_down")
     events = [e for e in f15["events"]
               if e.type in ev_types and sweep.index <= e.index <= n]
     if not events:
-        return None, ["no CHoCH/BOS after sweep"]
+        return None, [_reject("no_structure_event", "no CHoCH/BOS after sweep")]
     event = events[-1]
-    struct_direction_ok = True
     disps = [d for d in f15["displacements"]
              if d.direction == ("bullish" if bull else "bearish") and event.index <= d.index <= n]
     if not disps:
-        return None, ["no displacement after structure event"]
+        return None, [_reject("no_displacement", "no displacement after structure event")]
 
     # ---- FVG and/or order block
     fvgs = [g for g in f15["fvgs"]
@@ -157,8 +189,15 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
     obs = [ob for ob in f15["orderBlocks"]
            if ob.direction == ("bullish" if bull else "bearish")
            and sweep.index <= ob.displacementIndex <= n]
+    # A zone that price has already traded fully through is spent -- it is no
+    # longer evidence for the setup, so it must not keep it alive or score.
+    fvgs = [g for g in fvgs if g.invalidatedIndex is None or g.invalidatedIndex > n]
+    obs = [ob for ob in obs if ob.invalidatedIndex is None or ob.invalidatedIndex > n]
     if not fvgs and not obs:
-        return None, ["no FVG and no order block"]
+        return None, [_reject("no_fvg_or_order_block", "no FVG and no order block")]
+    # Freshness (untested vs already mitigated) feeds the score below.
+    fresh_fvg = any(g.is_fresh(n) for g in fvgs)
+    fresh_ob = any(ob.is_fresh(n) for ob in obs)
 
     # ---- late entry (rule 8): price already ran too far from invalidation
     lows, highs = f15["l"], f15["h"]
@@ -169,7 +208,7 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
         invalidation = max(max(highs[sweep.index:n + 1]), sweep.level)
         runup = invalidation - price
     if runup > cfg.get("risk.maxRunupAtrMultiple", 3.0) * atr:
-        return None, [f"late entry (runup {runup / atr:.1f}x ATR)"]
+        return None, [_reject("late_entry", f"late entry (runup {runup / atr:.1f}x ATR)")]
 
     if bull:
         confirm_high, confirm_low = max(highs[event.index:n + 1]), lows[n]
@@ -196,7 +235,7 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
     setup, risk_reason = build_setup(direction, price, atr, confirm_high, confirm_low,
                                      invalidation, swing_levels, cfg)
     if setup is None:
-        return None, [f"risk model rejected: {risk_reason}"]
+        return None, [_reject("risk_model_rejected", f"risk model rejected: {risk_reason}")]
 
     # rule 7: entry must have room before MAJOR opposing structure. Minor
     # pullback levels below the pullback origin are expected to be reclaimed
@@ -208,7 +247,7 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
         threshold = max(origin, setup.trigger)
         nearest = min((lv[0] for lv in swing_levels if lv[0] > threshold), default=None)
         if nearest is not None and (nearest - setup.trigger) < room:
-            return None, ["entry too close to opposing structure"]
+            return None, [_reject("entry_blocked_by_structure", "entry too close to opposing structure")]
     else:
         origin = min(lows[max(0, sweep.index - window):sweep.index + 1])
         threshold = min(origin, setup.trigger)
@@ -222,9 +261,9 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
     if funding is not None and dcfg.get("hardFilter", False):
         extreme = float(dcfg.get("fundingExtremePct", 0.05))
         if bull and funding >= extreme:
-            return None, [f"funding {funding:.3f}% extremely long (crowd long)"]
+            return None, [_reject("funding_extreme", f"funding {funding:.3f}% extremely long (crowd long)")]
         if not bull and funding <= -extreme:
-            return None, [f"funding {funding:.3f}% extremely short (crowd short)"]
+            return None, [_reject("funding_extreme", f"funding {funding:.3f}% extremely short (crowd short)")]
 
     # ---- premium/discount position within the setup range
     try:
@@ -252,6 +291,7 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
                              and sweep.index <= e.index < event.index for e in f15["events"]),
         "displacement": True,
         "sweep": True, "fvg": bool(fvgs), "orderBlock": bool(obs),
+        "fvgFresh": fresh_fvg, "orderBlockFresh": fresh_ob,
         "rsi": a["rsi"], "adx": a["adx"], "adxRising": adx_rising, "diSpread": di_spread,
         "plusDi": a.get("plusDi") or 0.0, "minusDi": a.get("minusDi") or 0.0,
         "relVolume": a["relVolume"], "atrPercent": a["atrPercent"],
@@ -259,12 +299,13 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
     scored = score_setup(direction, parts, setup.rr, cfg)
     tier = quality_tier(scored["score"], cfg)
     if tier is None:
-        return None, [f"score {scored['score']} below threshold"]
+        return None, [_reject("score_below_threshold", f"score {scored['score']} < {cfg.get('scoring.minScore', 80)}")]
     if setup.rr < cfg.get("risk.minRr", 2.5):
-        return None, [f"RR {setup.rr} < min"]  # belt & braces
+        return None, [_reject("rr_below_min", f"RR {setup.rr} < min")]  # belt & braces
 
-    fvg = fvgs[-1] if fvgs else None
-    ob = obs[-1] if obs else None
+    # Show the freshest available zone rather than merely the most recent.
+    fvg = next((g for g in reversed(fvgs) if g.is_fresh(n)), fvgs[-1] if fvgs else None)
+    ob = next((b for b in reversed(obs) if b.is_fresh(n)), obs[-1] if obs else None)
     payload = {
         "direction": direction,
         "score": scored["score"],
@@ -281,8 +322,14 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
         "liquiditySweep": {"type": sweep.direction, "level": sweep.level,
                            "barsAgo": n - sweep.index},
         "displacement": True,
-        "fvg": {"bottom": fvg.bottom, "top": fvg.top} if fvg else None,
-        "orderBlock": {"bottom": ob.bottom, "top": ob.top} if ob else None,
+        "fvg": {"bottom": fvg.bottom, "top": fvg.top,
+                "fresh": fvg.is_fresh(n),
+                "mitigatedBarsAgo": (n - fvg.mitigatedIndex)
+                if fvg.mitigatedIndex is not None and fvg.mitigatedIndex <= n else None} if fvg else None,
+        "orderBlock": {"bottom": ob.bottom, "top": ob.top,
+                       "fresh": ob.is_fresh(n),
+                       "mitigatedBarsAgo": (n - ob.mitigatedIndex)
+                       if ob.mitigatedIndex is not None and ob.mitigatedIndex <= n else None} if ob else None,
         "rsi": round(a["rsi"], 2), "adx": round(a["adx"], 2),
         "atr": round(a["atr"], 10), "atrPercent": round(a["atrPercent"], 4),
         "relativeVolume": round(a["relVolume"], 3),
@@ -321,7 +368,9 @@ def generate_signals(analyses: list[dict], cfg, existing: list[dict],
 
     active = [s for s in existing if s.get("status") in ACTIVE_STATUSES]
     if len(active) >= max_active:
-        return [], [{"reason": "max active signals reached", "symbol": "*"}]
+        return [], [dict(_reject("max_active_signals",
+                                 f"max active signals reached ({len(active)}/{max_active})"),
+                         symbol="*", direction="*")]
 
     last_by_key: dict[tuple[str, str], int] = {}
     seen_hashes: dict[str, int] = {}
@@ -339,13 +388,15 @@ def generate_signals(analyses: list[dict], cfg, existing: list[dict],
             sym = a["symbol"]
             dir_upper = direction.upper()
             if (sym, dir_upper) in active_symbols_dir:
-                rejects.append({"symbol": sym, "direction": direction,
-                                "reason": "duplicate active signal (rule 11)"})
+                rejects.append(dict(_reject("duplicate_active",
+                                            "duplicate active signal (rule 11)"),
+                                    symbol=sym, direction=direction))
                 continue
             last = last_by_key.get((sym, dir_upper))
             if last and now_ms - last < cooldown_ms:
-                rejects.append({"symbol": sym, "direction": direction,
-                                "reason": "symbol cooldown (rule 12)"})
+                rejects.append(dict(_reject("symbol_cooldown",
+                                            "symbol cooldown (rule 12)"),
+                                    symbol=sym, direction=direction))
                 continue
             dctx = derivatives.get(sym, {})
             ctx = {"fundingRatePct": dctx.get("fundingRatePct"),
@@ -353,13 +404,14 @@ def generate_signals(analyses: list[dict], cfg, existing: list[dict],
                    "session": session_at(now_ms, kill_zones) if kill_zones else None}
             payload, reasons = try_setup(direction, a, cfg, ctx)
             if payload is None:
-                rejects.append({"symbol": sym, "direction": direction, "reason": reasons[0]})
+                rejects.append(dict(reasons[0], symbol=sym, direction=direction))
                 continue
             h = setup_hash(sym, dir_upper, payload["trigger"], payload["stopLoss"],
                            payload["takeProfit"])
             if now_ms - seen_hashes.get(h, 0) < cooldown_ms:
-                rejects.append({"symbol": sym, "direction": direction,
-                                "reason": "duplicate setup hash in cooldown (rule 12)"})
+                rejects.append(dict(_reject("duplicate_setup_hash",
+                                            "duplicate setup hash in cooldown (rule 12)"),
+                                    symbol=sym, direction=direction))
                 continue
 
             expiry_ms = int(cfg.get("lifecycle.triggerExpiryCandles", 12)) * candle_ms

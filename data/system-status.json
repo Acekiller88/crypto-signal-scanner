@@ -18,75 +18,16 @@
     "candidates": 0,
     "signalsGenerated": 0,
     "rejects": {
-      "relVol 1.20 < min": 1,
-      "HTF not aligned (4H=strong_bullish,1H=neutral)": 19,
-      "relVol 1.05 < min": 3,
-      "relVol 1.12 < min": 2,
-      "HTF conflict (4H+1H oppose)": 54,
-      "RSI 42.2 outside [45,74]": 1,
-      "RSI 42.4 outside [45,74]": 1,
-      "no CHoCH/BOS after sweep": 8,
-      "volatility out of band (3.677%)": 1,
-      "volatility out of band (3.846%)": 1,
-      "relVol 0.90 < min": 1,
-      "volatility out of band (3.895%)": 1,
-      "RSI 40.9 outside [45,74]": 1,
-      "volatility out of band (3.378%)": 1,
-      "HTF not aligned (4H=strong_bullish,1H=bearish)": 14,
-      "4H regime RANGING": 12,
-      "RSI 40.2 outside [45,74]": 1,
-      "relVol 0.83 < min": 2,
-      "ADX 13.7 < min and not emerging": 1,
-      "HTF not aligned (4H=strong_bearish,1H=bullish)": 2,
-      "HTF not aligned (4H=neutral,1H=strong_bearish)": 9,
-      "RSI 55.7 outside [26,55]": 1,
-      "volatility out of band (3.512%)": 1,
-      "no displacement after structure event": 2,
-      "relVol 0.77 < min": 2,
-      "HTF not aligned (4H=neutral,1H=strong_bullish)": 2,
-      "relVol 0.73 < min": 1,
-      "HTF not aligned (4H=strong_bullish,1H=strong_bearish)": 6,
-      "ADX 12.4 < min and not emerging": 1,
-      "ADX 11.9 < min and not emerging": 1,
-      "relVol 1.19 < min": 1,
-      "relVol 0.95 < min": 1,
-      "RSI 35.9 outside [45,74]": 1,
-      "volatility out of band (3.562%)": 1,
-      "RSI 75.1 outside [45,74]": 1,
-      "volatility out of band (3.225%)": 1,
-      "relVol 1.03 < min": 1,
-      "ADX 10.1 < min and not emerging": 1,
-      "relVol 0.65 < min": 1,
-      "HTF not aligned (4H=neutral,1H=neutral)": 4,
-      "ADX 13.9 < min and not emerging": 2,
-      "ADX 9.3 < min and not emerging": 1,
-      "RSI 38.0 outside [45,74]": 1,
-      "relVol 0.63 < min": 1,
-      "HTF not aligned (4H=bullish,1H=strong_bearish)": 2,
-      "volatility out of band (3.805%)": 1,
-      "RSI 79.3 outside [45,74]": 1,
-      "relVol 0.93 < min": 1,
-      "RSI 34.7 outside [45,74]": 1,
-      "RSI 58.0 outside [26,55]": 1,
-      "RSI 41.4 outside [45,74]": 2,
-      "RSI 42.9 outside [45,74]": 1,
-      "volatility out of band (3.182%)": 1,
-      "no liquidity sweep in window": 1,
-      "HTF not aligned (4H=strong_bearish,1H=neutral)": 1,
-      "relVol 0.37 < min": 1,
-      "relVol 1.00 < min": 1,
-      "ADX 10.9 < min and not emerging": 1,
-      "ADX 13.2 < min and not emerging": 1,
-      "relVol 0.60 < min": 1,
-      "relVol 1.09 < min": 1,
-      "RSI 76.1 outside [45,74]": 1,
-      "ADX 11.0 < min and not emerging": 1,
-      "HTF not aligned (4H=strong_bearish,1H=strong_bullish)": 2,
-      "RSI 44.5 outside [45,74]": 2,
-      "RSI 39.6 outside [45,74]": 1,
-      "RSI 39.5 outside [45,74]": 1,
-      "RSI 43.3 outside [45,74]": 1,
-      "RSI 35.3 outside [45,74]": 1
+      "volume_thin": 22,
+      "htf_not_aligned": 61,
+      "htf_conflict": 54,
+      "momentum_rsi_out_of_band": 21,
+      "no_structure_event": 8,
+      "volatility_out_of_band": 9,
+      "regime_ranging": 12,
+      "momentum_adx_low": 10,
+      "no_displacement": 2,
+      "no_liquidity_sweep": 1
     },
     "apiStats": {
       "requests": 427,
@@ -103,7 +44,49 @@
       "newestCandleCloseMs": 1788066899999,
       "ageSeconds": 103.3
     },
-    "activeSignals": 0
+    "activeSignals": 0,
+    "rejectFunnel": [
+      {
+        "stage": "htf_conflict",
+        "rejected": 54
+      },
+      {
+        "stage": "htf_not_aligned",
+        "rejected": 61
+      },
+      {
+        "stage": "regime_ranging",
+        "rejected": 12
+      },
+      {
+        "stage": "volatility_out_of_band",
+        "rejected": 9
+      },
+      {
+        "stage": "momentum_adx_low",
+        "rejected": 10
+      },
+      {
+        "stage": "momentum_rsi_out_of_band",
+        "rejected": 21
+      },
+      {
+        "stage": "volume_thin",
+        "rejected": 22
+      },
+      {
+        "stage": "no_liquidity_sweep",
+        "rejected": 1
+      },
+      {
+        "stage": "no_structure_event",
+        "rejected": 8
+      },
+      {
+        "stage": "no_displacement",
+        "rejected": 2
+      }
+    ]
   },
   "lastSuccessfulScan": 1788067003291,
   "nextExpectedScanAt": 1788067800000,

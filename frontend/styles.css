@@ -224,3 +224,21 @@ body {
   .stat-value { font-size: 17px; }
   .top-status { width: 100%; }
 }
+
+/* Stale-data mode: when the browser detects the published data is older than
+   the scan cadence allows, the whole page is visibly marked so a snapshot is
+   never mistaken for a live market view. */
+body.data-stale .signal-grid,
+body.data-stale #screener,
+body.data-stale #market-overview { opacity: .72; }
+body.data-stale .notice.warn,
+body.data-stale #health-notice {
+  border-left: 4px solid var(--red);
+  font-weight: 600;
+}
+
+/* Rejection funnel */
+.funnel-card { padding: 14px 16px; margin-top: 14px; }
+.funnel-card summary { cursor: pointer; font-weight: 600; }
+.funnel-card .num { text-align: right; font-variant-numeric: tabular-nums; }
+.funnel-card table { width: 100%; margin-top: 10px; }

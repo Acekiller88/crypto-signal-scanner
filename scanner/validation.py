@@ -43,7 +43,10 @@ def validate_signal(sig: dict, cfg) -> list[str]:
         return errors
     if sig["stopLoss"] == sig["takeProfit"]:
         errors.append("SL == TP")
-    entry = sig["entryPrice"] or sig["triggerPrice"]
+    # entryPrice is deliberately NOT in REQUIRED_FIELDS: it is null until the
+    # signal triggers. Read it defensively so the validator cannot raise
+    # KeyError on a payload it has already declared structurally complete.
+    entry = sig.get("entryPrice") or sig["triggerPrice"]
     if sig["direction"] == "LONG" and not (sig["stopLoss"] < entry < sig["takeProfit"]):
         errors.append("LONG requires SL < entry < TP")
     if sig["direction"] == "SHORT" and not (sig["takeProfit"] < entry < sig["stopLoss"]):

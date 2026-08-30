@@ -125,6 +125,20 @@
       high-confluence setups (score ≥ 80) — an empty board means no qualifying structure right now.
       Zero forced signals is by design.</div>
     <div class="signal-grid" id="active-grid"></div>
+
+    <!-- Why zero? The funnel below is the answer. Without it "no signals"
+         is indistinguishable from "engine broken". -->
+    <details class="card funnel-card" id="funnel-card">
+      <summary>Why were there no signals? — last scan rejection funnel</summary>
+      <p class="muted small" id="funnel-intro">—</p>
+      <table class="table compact" id="funnel-table">
+        <thead><tr><th>Gate (in evaluation order)</th><th class="num">Rejected</th><th class="num">Survivors</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="muted small">Each gate only sees what survived the one above it. The gate that
+        drops the most is the one actually constraining the system — tune that one, not the
+        thresholds further down.</p>
+    </details>
   </section>
 
   <!-- ============ RECENT SIGNALS ============ -->

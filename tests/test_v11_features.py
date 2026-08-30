@@ -133,7 +133,7 @@ class TestSignalContext:
             ctx = {"fundingRatePct": 0.5, "openInterest": None, "session": "OFF"}
             payload, reasons = try_setup("long", analysis, cfg, ctx)
             assert payload is None
-            assert "funding" in reasons[0]
+            assert reasons[0]["code"] == "funding_extreme"
             # opposite direction still allowed
             short_ctx = {"fundingRatePct": 0.5, "openInterest": None, "session": "OFF"}
             spayload, _sreasons = try_setup("short", analysis, cfg, short_ctx)
@@ -161,7 +161,8 @@ class TestSignalContext:
 
 
 def _reasons_join(reasons):
-    return " ".join(reasons)
+    """Rejections are structured records ({code, detail}); join their details."""
+    return " ".join(r["detail"] if isinstance(r, dict) else str(r) for r in reasons)
 
 
 class TestBias1dAnalysis:

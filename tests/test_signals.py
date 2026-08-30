@@ -69,25 +69,25 @@ class TestHardRejections:
         analysis["bias4h"]["bias"] = "strong_bearish"
         analysis["bias1h"]["bias"] = "bearish"
         payload, reasons = try_setup("long", analysis, cfg)
-        assert payload is None and "HTF conflict" in reasons[0]
+        assert payload is None and reasons[0]["code"] == "htf_conflict"
 
     def test_ranging_regime_rejects(self, cfg):
         analysis, _, _ = long_analysis(cfg)
         analysis["regime"] = "RANGING"
         payload, reasons = try_setup("long", analysis, cfg)
-        assert payload is None and "RANGING" in reasons[0]
+        assert payload is None and reasons[0]["code"] == "regime_ranging"
 
     def test_low_relative_volume_rejects(self, cfg):
         analysis, _, _ = long_analysis(cfg)
         analysis["relVolume"] = 1.0
         payload, reasons = try_setup("long", analysis, cfg)
-        assert payload is None and "relVol" in reasons[0]
+        assert payload is None and reasons[0]["code"] == "volume_thin"
 
     def test_rsi_out_of_band_rejects(self, cfg):
         analysis, _, _ = long_analysis(cfg)
         analysis["rsi"] = 80.0  # overextended
         payload, reasons = try_setup("long", analysis, cfg)
-        assert payload is None and "RSI" in reasons[0]
+        assert payload is None and reasons[0]["code"] == "momentum_rsi_out_of_band"
 
     def test_missing_indicators_reject(self, cfg):
         analysis, _, _ = long_analysis(cfg)
@@ -114,7 +114,7 @@ class TestDedupeAndCooldowns:
                                 generatedAt=now - 5 * MS_15M)]
         signals, rejects = generate_signals([analysis], cfg, existing, now, "test")
         assert signals == []
-        assert any("duplicate active" in r["reason"] for r in rejects)
+        assert any(r["code"] == "duplicate_active" for r in rejects)
 
     def test_symbol_cooldown_suppresses_same_direction(self, cfg):
         analysis, _, now = long_analysis(cfg)
@@ -131,7 +131,7 @@ class TestDedupeAndCooldowns:
                                  generatedAt=now - 30 * 60_000)]
         signals2, rejects2 = generate_signals([analysis], cfg, existing2, now, "test")
         assert signals2 == []
-        assert any("cooldown" in r["reason"] for r in rejects2)
+        assert any(r["code"] == "symbol_cooldown" for r in rejects2)
 
     def test_max_active_signals_cap(self, cfg):
         analysis, _, now = long_analysis(cfg)
@@ -146,7 +146,7 @@ class TestDedupeAndCooldowns:
         analysis, _, now = long_analysis(cfg)
         signals, rejects = generate_signals([analysis], cfg, [], now, "test")
         assert all(s["direction"] == "LONG" for s in signals)
-        assert any("HTF" in r["reason"] for r in rejects if r["direction"] == "short")
+        assert any(r["code"].startswith("htf_") for r in rejects if r["direction"] == "short")
 
 
 class TestIds:

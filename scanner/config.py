@@ -45,6 +45,10 @@ DEFAULTS: dict[str, Any] = {
     "signalModel": {
         "rsiLongMin": 50, "rsiLongMax": 72, "rsiShortMin": 28, "rsiShortMax": 50,
         "minAdx15m": 18, "minRelVolume": 1.20, "minAtrPercent": 0.10, "maxAtrPercent": 3.00,
+        # ADX does not mean the same thing on every timeframe; higher
+        # timeframes trend more smoothly and read lower for the same
+        # conviction. Falls back to minAdx15m when a key is absent.
+        "minAdxByTimeframe": {"15m": None, "1h": 18, "4h": 20, "1d": 20},
     },
     "risk": {
         "minRr": 2.5, "preferredRr": 3.0,

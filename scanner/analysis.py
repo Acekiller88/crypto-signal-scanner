@@ -19,6 +19,22 @@ from . import smc
 TIMEFRAMES = ("4h", "1h", "15m")
 
 
+def min_adx_for(cfg, timeframe: str) -> float:
+    """ADX threshold for a given timeframe.
+
+    ADX is not scale-free across timeframes: the same market reads differently
+    on 15M and on 1D, so a single ``signalModel.minAdx15m`` used everywhere
+    mis-classifies higher-timeframe regimes (it was applied to the 4H regime
+    and the 1D bias). Per-timeframe overrides live in
+    ``signalModel.minAdxByTimeframe``; the 15M value remains the fallback so
+    existing configs keep working.
+    """
+    per_tf = cfg.get("signalModel.minAdxByTimeframe", {}) or {}
+    fallback = cfg.get("signalModel.minAdx15m", 15)
+    value = per_tf.get(timeframe)
+    return float(value) if value is not None else float(fallback)
+
+
 def htf_bias(closes: list[float], ema_fast: list, ema_mid: list, ema_slow: list,
              adx_value: Optional[float], min_adx: float) -> dict:
     """Classify a higher timeframe as strong_bullish..strong_bearish.
@@ -47,8 +63,12 @@ def htf_bias(closes: list[float], ema_fast: list, ema_mid: list, ema_slow: list,
     else:
         bias = "neutral"
     strength = 2 if bias.startswith("strong") else (1 if bias in ("bullish", "bearish") else 0)
-    if adx_value is not None and adx_value < min_adx and bias == "neutral":
-        bias = "neutral"
+    # A directional EMA stack with no trend strength behind it is a drift, not
+    # a bias. Demote it so the signal models do not treat a flat tape as an
+    # aligned higher timeframe. (The previous version of this branch assigned
+    # "neutral" to something already "neutral" -- a no-op that demoted nothing.)
+    if adx_value is not None and min_adx and adx_value < min_adx and bias in ("bullish", "bearish"):
+        bias, strength = "neutral", 0
     return {"bias": bias, "strength": strength, "emaFast": f, "emaMid": m, "emaSlow": s,
             "adx": adx_value}
 
@@ -127,7 +147,7 @@ def analyze_symbol(symbol: str, klines: dict, cfg: Config, now_ms: int) -> dict:
                            ind.ema(c1, icfg.get("emaSlow")),
                            ind.value_at(ind.adx(h1, l1, c1, icfg.get("adxPeriod"))["adx"],
                                         len(c1) - 1),
-                           cfg.get("signalModel.minAdx15m"))
+                           min_adx_for(cfg, "1d"))
     else:
         bias_1d = {"bias": "unknown", "strength": 0}
 
@@ -135,9 +155,9 @@ def analyze_symbol(symbol: str, klines: dict, cfg: Config, now_ms: int) -> dict:
     last = len(f15["c"]) - 1
 
     bias_4h = htf_bias(f4["c"], f4["emaFast"], f4["emaMid"], f4["emaSlow"],
-                       ind.value_at(f4["adx"], len(f4["c"]) - 1), cfg.get("signalModel.minAdx15m"))
+                       ind.value_at(f4["adx"], len(f4["c"]) - 1), min_adx_for(cfg, "4h"))
     bias_1h = htf_bias(f1["c"], f1["emaFast"], f1["emaMid"], f1["emaSlow"],
-                       ind.value_at(f1["adx"], len(f1["c"]) - 1), cfg.get("signalModel.minAdx15m"))
+                       ind.value_at(f1["adx"], len(f1["c"]) - 1), min_adx_for(cfg, "1h"))
 
     out.update({
         "ok": True,
@@ -147,7 +167,7 @@ def analyze_symbol(symbol: str, klines: dict, cfg: Config, now_ms: int) -> dict:
         "last15mOpenTime": f15["candles"][last].openTime,
         "price": f15["candles"][last].close,
         "regime": market_regime(bias_4h, ind.value_at(f4["adx"], len(f4["c"]) - 1),
-                                cfg.get("signalModel.minAdx15m")),
+                                min_adx_for(cfg, "4h")),
         "bias1d": bias_1d,
         "bias4h": bias_4h,
         "bias1h": bias_1h,
