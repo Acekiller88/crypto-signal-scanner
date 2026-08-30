@@ -241,7 +241,12 @@ def compute_performance(signals: list[dict], cfg, now_ms: int,
     base["monteCarlo"] = _monte_carlo(r_paths, block=cfg.get("performance.monteCarloBlockLength"))
     if base["monteCarlo"]:
         base["monteCarlo"]["basis"] = basis
-        base["monteCarloNet"] = _max_drawdown_r(r_paths) if r_paths else None
+        # A field named *Net must never be populated from the gross series.
+        # When costs were not modelled there is no net figure to report, and
+        # null is the honest answer -- silently echoing the gross drawdown
+        # under a "net" label understates the real cost of trading.
+        base["monteCarloNet"] = (_max_drawdown_r(r_paths)
+                                 if (r_paths and basis == "net") else None)
 
     # empirical score calibration: historical win rate per quality bucket with
     # Wilson 95% CI -- descriptive statistics, NOT probabilities of future wins

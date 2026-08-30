@@ -526,3 +526,46 @@ class TestDialectIsolation:
         from scanner.market_data import MarketDataClient
         with pytest.raises(TypeError, match="endpoints must be a list"):
             MarketDataClient(Config.load())
+
+
+class TestValidatorAndMetricHonesty:
+    """Fields must mean what their names say."""
+
+    def test_validator_survives_an_untriggered_signal(self, cfg):
+        """entryPrice is null until a signal triggers.
+
+        It is deliberately absent from REQUIRED_FIELDS, but validate_signal
+        read it with sig["entryPrice"] -- so it raised KeyError on a payload it
+        had just declared structurally complete.
+        """
+        from scanner.validation import REQUIRED_FIELDS, validate_signal
+        assert "entryPrice" not in REQUIRED_FIELDS
+        sig = make_signal()
+        sig.pop("entryPrice", None)
+        assert validate_signal(sig, cfg) == []      # must not raise KeyError
+
+    def test_untriggered_signal_is_validated_against_its_trigger(self, cfg):
+        from scanner.validation import validate_signal
+        sig = make_signal()
+        assert sig["entryPrice"] is None
+        assert validate_signal(sig, cfg) == []
+
+    def test_monte_carlo_net_is_null_when_costs_were_not_modelled(self, cfg):
+        """A *Net field populated from the gross series understates real cost."""
+        from scanner.performance import compute_performance
+        resolved = []
+        for i, r in enumerate((1.5, -1.0, 2.0, -1.0, 1.2, 1.8, -1.0, 2.2)):
+            resolved.append(make_signal(
+                id=f"SIG-mc{i:04d}",
+                status="TP_HIT" if r > 0 else "SL_HIT",
+                outcome="WIN" if r > 0 else "LOSS",
+                generatedAt=T0 - (20 - i) * MS_15M,
+                closedAt=T0 - (19 - i) * MS_15M,
+                rMultiple=r,          # gross only: no costR, no rMultipleNet
+            ))
+        perf = compute_performance(resolved, cfg, T0)
+        assert not perf.get("costsModelled")
+        if perf.get("monteCarlo"):
+            assert perf["monteCarlo"]["basis"] == "gross"
+        assert perf.get("monteCarloNet") is None, \
+            "monteCarloNet must stay null when there is no net series"

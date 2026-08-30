@@ -99,16 +99,6 @@ def signal_id(symbol: str, direction: str, generated_ms: int, trigger: float) ->
     return "SIG-" + hashlib.sha1(payload.encode()).hexdigest()[:10]
 
 
-def _last_index(items, lo: int, hi: int, predicate) -> Optional[int]:
-    """Most recent index in [lo, hi] satisfying predicate, or None."""
-    for i in range(hi, lo - 1, -1):
-        if i < 0:
-            continue
-        if predicate(items[i]):
-            return i
-    return None
-
-
 def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Optional[dict], list[str]]:
     """Evaluate one symbol for one direction. Returns (setup_payload|None, reasons).
 
@@ -188,7 +178,6 @@ def try_setup(direction: str, a: dict, cfg, ctx: dict | None = None) -> tuple[Op
     if not events:
         return None, [_reject("no_structure_event", "no CHoCH/BOS after sweep")]
     event = events[-1]
-    struct_direction_ok = True
     disps = [d for d in f15["displacements"]
              if d.direction == ("bullish" if bull else "bearish") and event.index <= d.index <= n]
     if not disps:
