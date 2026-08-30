@@ -76,7 +76,7 @@ crypto-signal-scanner/
 │   └── data/                 ← mirror of /data served statically by Cloudflare Pages
 ├── config/strategy.json      ALL strategy parameters (nothing hard-coded)
 ├── data/                     signals.json · performance.json · system-status.json · market-snapshots.json
-├── tests/                    193 unit + integration tests (offline, deterministic)
+├── tests/                    191 unit + integration tests (offline, deterministic)
 ├── .github/workflows/
 │   ├── scanner.yml           cron */15 scan → validate → commit → push
 │   └── tests.yml             pytest on every push/PR
@@ -91,7 +91,7 @@ crypto-signal-scanner/
 git clone <your-repo-url> crypto-signal-scanner
 cd crypto-signal-scanner
 pip install -r requirements.txt      # pytest only; the engine is stdlib-only
-python -m pytest tests/ -q           # 193 tests must pass
+python -m pytest tests/ -q           # 191 tests must pass
 ```
 
 ## 3. Local execution
@@ -114,6 +114,21 @@ cd frontend && python -m http.server 8080
 ```
 
 ## 4. GitHub Actions setup (the 15-minute scheduler)
+
+> **Install the workflows first.** They ship staged at `ops/github-workflows/`
+> rather than live in `.github/workflows/`, because the automation that opens
+> pull requests here cannot write to `.github/` without the `workflows` OAuth
+> scope. Activate them with one command, from your own account:
+>
+> ```bash
+> mkdir -p .github/workflows && cp ops/github-workflows/*.yml .github/workflows/
+> git add .github/workflows && git commit -m "ci: install scanner + test workflows"
+> git push
+> ```
+>
+> Nothing is scheduled until those files sit under `.github/workflows/` on your
+> default branch. This repository ran for its entire history without them —
+> which is why `data/signals.json` had never contained a single signal.
 
 1. Create a **new GitHub repository** (e.g. `crypto-signal-scanner`) and push this code:
    ```bash
@@ -343,7 +358,7 @@ live behaviour.
 ## 12. Testing
 
 ```bash
-python -m pytest tests/ -v          # 193 tests, fully offline
+python -m pytest tests/ -v          # 191 tests, fully offline
 ```
 
 Coverage: EMA/RSI/ATR/ADX/RelVol/VWAP (hand-computed vectors) · swing

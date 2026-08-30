@@ -41,14 +41,32 @@ def check() -> list[str]:
     readme = (root / "README.md").read_text(encoding="utf-8")
     problems: list[str] = []
 
-    # 1. Every workflow the README references must actually exist.
+    # Workflows live in .github/workflows/ once installed. Until then they are
+    # staged in ops/github-workflows/, because the automation that opens PRs
+    # here cannot write to .github/ without the `workflows` OAuth scope. Both
+    # locations count as "the workflow exists"; §4 of the README explains the
+    # one-command install.
+    installed_dir = root / ".github" / "workflows"
+    staged_dir = root / "ops" / "github-workflows"
+
+    def _workflow(name: str) -> Path | None:
+        for directory in (installed_dir, staged_dir):
+            candidate = directory / name
+            if candidate.exists():
+                return candidate
+        return None
+
+    # 1. Every workflow the README references must actually exist somewhere.
     for wf in sorted(set(re.findall(r"\.github/workflows/([A-Za-z0-9_.-]+\.yml)", readme))):
-        if not (root / ".github" / "workflows" / wf).exists():
-            problems.append(f"README references .github/workflows/{wf}, which does not exist")
+        if _workflow(wf) is None:
+            problems.append(
+                f"README references .github/workflows/{wf}, which exists in neither "
+                f".github/workflows/ nor ops/github-workflows/")
 
     # 2. The scheduler must exist at all if a 15-minute cadence is claimed.
-    workflow_dir = root / ".github" / "workflows"
-    workflows = sorted(workflow_dir.glob("*.yml")) if workflow_dir.is_dir() else []
+    workflows = sorted(installed_dir.glob("*.yml")) if installed_dir.is_dir() else []
+    if not workflows and staged_dir.is_dir():
+        workflows = sorted(staged_dir.glob("*.yml"))
     if re.search(r"every 15 minutes|\*/15", readme) and not workflows:
         problems.append("README claims a 15-minute schedule but no workflow files exist")
     # ...and that scheduler must really carry the cron it advertises.
