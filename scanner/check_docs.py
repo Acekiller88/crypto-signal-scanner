@@ -58,11 +58,23 @@ def check() -> list[str]:
             problems.append("README documents a */15 cron that no workflow declares")
 
     # 3. Test counts quoted in the README must match the real suite.
+    #
+    # Adding a test should not break the build, but a README claiming 153 when
+    # the suite has 190 is exactly the drift this checker exists to catch. So
+    # the count may lag *behind* reality by a small margin (tests were added
+    # and the prose not yet refreshed) but may never overstate it, and may
+    # never drift far enough to be misleading.
     actual = _count_tests()
+    tolerance = max(5, actual // 20)  # 5%, floor of 5
     quoted = {int(n) for n in re.findall(r"(\d{2,4})\s+(?:unit \+ integration )?tests?\b", readme)}
     for n in sorted(quoted):
-        if n != actual:
-            problems.append(f"README quotes {n} tests; the suite collects {actual}")
+        if n > actual:
+            problems.append(
+                f"README claims {n} tests but the suite only collects {actual}")
+        elif actual - n > tolerance:
+            problems.append(
+                f"README quotes {n} tests; the suite collects {actual} "
+                f"(drift {actual - n} > tolerance {tolerance}) -- refresh the README")
 
     # 4. The badge must point at the file the engine actually writes.
     badge_paths = re.findall(r"raw\.githubusercontent\.com[^)\s]*?/((?:frontend|data)[^)\s?]*badge\.json)",

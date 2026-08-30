@@ -76,7 +76,7 @@ crypto-signal-scanner/
 │   └── data/                 ← mirror of /data served statically by Cloudflare Pages
 ├── config/strategy.json      ALL strategy parameters (nothing hard-coded)
 ├── data/                     signals.json · performance.json · system-status.json · market-snapshots.json
-├── tests/                    186 unit + integration tests (offline, deterministic)
+├── tests/                    190 unit + integration tests (offline, deterministic)
 ├── .github/workflows/
 │   ├── scanner.yml           cron */15 scan → validate → commit → push
 │   └── tests.yml             pytest on every push/PR
@@ -91,7 +91,7 @@ crypto-signal-scanner/
 git clone <your-repo-url> crypto-signal-scanner
 cd crypto-signal-scanner
 pip install -r requirements.txt      # pytest only; the engine is stdlib-only
-python -m pytest tests/ -q           # 186 tests must pass
+python -m pytest tests/ -q           # 190 tests must pass
 ```
 
 ## 3. Local execution
@@ -343,7 +343,7 @@ live behaviour.
 ## 12. Testing
 
 ```bash
-python -m pytest tests/ -v          # 186 tests, fully offline
+python -m pytest tests/ -v          # 190 tests, fully offline
 ```
 
 Coverage: EMA/RSI/ATR/ADX/RelVol/VWAP (hand-computed vectors) · swing

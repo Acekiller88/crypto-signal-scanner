@@ -126,7 +126,15 @@ class MarketDataClient:
                  max_retries: int = 3, backoff: float = 1.5, max_requests: int = 700):
         if not endpoints:
             raise ValueError("at least one endpoint required")
-        self.endpoints = endpoints
+        # Fail loudly here rather than 100 lines later inside the retry loop:
+        # passing a Config by mistake used to surface as "object of type
+        # 'Config' has no len()" from _by_dialect.
+        if not isinstance(endpoints, (list, tuple)):
+            raise TypeError(
+                "endpoints must be a list of endpoint dicts, got "
+                f"{type(endpoints).__name__}; use make_client(cfg) to build "
+                "a client from a Config")
+        self.endpoints = list(endpoints)
         self.timeout = timeout
         self.max_retries = max_retries
         self.backoff = backoff
@@ -138,8 +146,19 @@ class MarketDataClient:
     def _get(self, path: str, params: dict | None = None) -> dict | list:
         query = ("?" + urllib.parse.urlencode(params)) if params else ""
         last_exc: Exception | None = None
-        for hop in range(len(self.endpoints)):
-            idx = (self._endpoint_idx + hop) % len(self.endpoints)
+        # Only fail over between hosts that speak the SAME dialect. The request
+        # path and params were built for one API shape, so sending them to a
+        # host of another dialect can only 404 (a Binance "/exchangeInfo" is
+        # meaningless to api.bybit.com). Crossing dialects is _by_dialect's job:
+        # it re-builds the request in the right shape first.
+        dialect = self._dialect()
+        candidates = [i for i in range(len(self.endpoints))
+                      if self.endpoints[i].get("dialect", "binance") == dialect]
+        # Start at the currently selected endpoint, then wrap.
+        if self._endpoint_idx in candidates:
+            pivot = candidates.index(self._endpoint_idx)
+            candidates = candidates[pivot:] + candidates[:pivot]
+        for idx in candidates:
             ep = self.endpoints[idx]
             # Translated dialects (e.g. Bybit) pass their own absolute API path,
             # so the endpoint's ``base`` is the host root, not a path prefix.
@@ -168,7 +187,7 @@ class MarketDataClient:
                     if attempt < self.max_retries:
                         self.stats.retries += 1
                         time.sleep(self.backoff * (attempt + 1) * (2.0 if exc.rate_limited else 1.0))
-        raise MarketDataError(f"all endpoints failed: {last_exc}")
+        raise MarketDataError(f"all {dialect} endpoints failed: {last_exc}")
 
     def _fetch(self, url: str) -> dict | list:
         request = urllib.request.Request(url, headers={
@@ -386,12 +405,24 @@ def bybit_ticker_24h(client: "MarketDataClient") -> list:
         client._get("/v5/market/tickers", {"category": "linear"}), "tickers")
     out = []
     for row in result.get("list", []) or []:
+        # Bybit reports 24h change as a ratio ("0.0123"); Binance uses percent.
+        try:
+            pct = float(row.get("price24hPcnt") or 0.0) * 100.0
+        except (TypeError, ValueError):
+            pct = 0.0
         out.append({
             "symbol": row.get("symbol"),
             # Bybit turnover24h is quote-denominated volume == Binance quoteVolume
             "quoteVolume": row.get("turnover24h", "0"),
             "volume": row.get("volume24h", "0"),
             "lastPrice": row.get("lastPrice", "0"),
+            "priceChangePercent": f"{pct:.4f}",
+            # Bybit folds funding and OI into the ticker; Binance serves them
+            # from /premiumIndex and /openInterest. Carrying them here lets the
+            # premium_index/open_interest adapters reuse a single request.
+            "lastFundingRate": row.get("fundingRate", "0") or "0",
+            "openInterest": row.get("openInterest", "0") or "0",
+            "markPrice": row.get("markPrice", row.get("lastPrice", "0")),
         })
     return out
 
