@@ -2,8 +2,15 @@
 
 Win Rate = Wins / (Wins + Losses). WAITING / EXPIRED / AMBIGUOUS / CANCELLED
 are NEVER in the denominator, and every displayed metric carries its sample
-size. Profit factor = sum(R of wins) / |sum(R of losses)| where a loss is
--1R by definition of a structure stop.
+size. Profit factor = sum(R of wins) / |sum(R of losses)|.
+
+Every metric is reported twice: GROSS (``winRate``, ``expectancyR``,
+``profitFactor``, ``sharpeR``, ``monteCarlo``) and NET of fees + funding
+(``winRateNet``, ``expectancyNetR``, ``profitFactorNet``, ``avgCostR``). Gross
+is kept for continuity and for diagnosing the setup quality itself; net is the
+number that describes what the system would actually have earned. A stop-out
+is -1R only when the fill matched the trigger -- gap fills are charged their
+true distance (see ``outcomes.r_multiple``).
 """
 from __future__ import annotations
 
@@ -41,20 +48,39 @@ def _max_drawdown_r(r_sequence):
     return round(max_dd, 3)
 
 
-def _monte_carlo(r_sequence, paths=500, seed=1337):
-    # deterministic bootstrap over resolved R multiples (fixed seed)
-    if len(r_sequence) < 5:
-        return None
-    rng = random.Random(seed)  # fixed seed -> reproducible; engine randomness is otherwise absent
+def _monte_carlo(r_sequence, paths=500, seed=1337, block=None):
+    """Deterministic moving-block bootstrap over resolved R multiples.
+
+    Contiguous BLOCKS are resampled rather than individual trades, so losing
+    streaks survive the shuffle. An independent bootstrap assumes trades are
+    unrelated, which they demonstrably are not in crypto: one BTC move takes
+    most of a correlated book with it. Independent resampling therefore
+    understates tail drawdown, and maxDDp95 is exactly the number a reader
+    would act on.
+
+    Block length defaults to ``round(n ** 1/3)`` capped at ``n // 2`` -- long
+    enough to preserve local clustering, short enough that the path still
+    mixes. Deterministic: fixed seed, no other engine randomness.
+    """
     n = len(r_sequence)
+    if n < 5:
+        return None
+    rng = random.Random(seed)  # fixed seed -> reproducible
+    if block is None:
+        block = max(1, min(max(1, n // 2), round(n ** (1.0 / 3.0))))
+    block = max(1, min(block, n))
+    starts = list(range(n - block + 1)) or [0]
+
     terminals, drawdowns = [], []
     for _ in range(paths):
-        equity, peak, dd = 0.0, 0.0, 0.0
-        for _ in range(n):
-            r = r_sequence[rng.randrange(n)]
-            equity += r
-            peak = max(peak, equity)
-            dd = max(dd, peak - equity)
+        equity, peak, dd, drawn = 0.0, 0.0, 0.0, 0
+        while drawn < n:
+            s = rng.choice(starts)
+            for k in range(min(block, n - drawn)):
+                equity += r_sequence[s + k]
+                peak = max(peak, equity)
+                dd = max(dd, peak - equity)
+                drawn += 1
         terminals.append(equity)
         drawdowns.append(dd)
 
@@ -64,12 +90,15 @@ def _monte_carlo(r_sequence, paths=500, seed=1337):
         return round(s[idx], 2)
 
     return {
-        "paths": paths, "tradesPerPath": n,
+        "paths": paths, "tradesPerPath": n, "blockLength": block,
+        "sampling": "moving-block",
         "terminalRp5": pct(terminals, 0.05), "terminalRp50": pct(terminals, 0.50),
         "terminalRp95": pct(terminals, 0.95),
         "maxDDp50": pct(drawdowns, 0.50), "maxDDp95": pct(drawdowns, 0.95),
-        "note": "bootstrap resampling of historical R multiples (deterministic seed); "
-                "describes the PAST distribution, not a prediction",
+        "note": "moving-block bootstrap of historical R multiples (deterministic "
+                "seed); blocks preserve loss clustering that an independent "
+                "shuffle would destroy. Describes the PAST distribution, not a "
+                "prediction",
     }
 
 
@@ -132,6 +161,24 @@ def _agg(items: list[dict]) -> dict:
     slippage = {"avgPct": round(sum(slips) / len(slips), 4) if slips else None,
                 "maxPct": round(max(slips), 4) if slips else None,
                 "fills": len(slips)}
+
+    # ---- net-of-cost view -------------------------------------------------
+    # costR is written by the lifecycle engine (see costs.py). Signals closed
+    # before costing existed simply have no costR and fall back to gross, so
+    # historical books stay readable instead of silently reading as zero-cost.
+    resolved = [s for s in items if s["status"] in (WIN, LOSS)]
+
+    def _net(s):
+        return s.get("rMultipleNet") if s.get("rMultipleNet") is not None else s.get("rMultiple")
+
+    net_rs = [r for r in (_net(s) for s in resolved) if r is not None]
+    net_wins = sum(1 for r in net_rs if r > 0)
+    net_losses = sum(1 for r in net_rs if r <= 0)
+    net_gross_win = sum(r for r in net_rs if r > 0)
+    net_gross_loss = abs(sum(r for r in net_rs if r <= 0))
+    cost_rs = [s.get("costR") for s in resolved if s.get("costR") is not None]
+    costs_modelled = len(cost_rs) > 0
+
     return {
         "total": len(items),
         "waiting": sum(1 for s in items if s["status"] == WAITING_TRIGGER),
@@ -152,6 +199,16 @@ def _agg(items: list[dict]) -> dict:
         "expectancyR": expectancy,
         "sharpeR": sharpe_r,
         "slippage": slippage,
+        # net of fees + funding. Reported ALONGSIDE gross, never instead of it.
+        "costsModelled": costs_modelled,
+        "avgCostR": round(sum(cost_rs) / len(cost_rs), 4) if cost_rs else None,
+        "totalCostR": round(sum(cost_rs), 3) if cost_rs else None,
+        "netWins": net_wins if costs_modelled else None,
+        "netLosses": net_losses if costs_modelled else None,
+        "winRateNet": _pct(net_wins, net_wins + net_losses) if costs_modelled else None,
+        "expectancyNetR": round(sum(net_rs) / len(net_rs), 3) if (net_rs and costs_modelled) else None,
+        "profitFactorNet": (round(net_gross_win / net_gross_loss, 3)
+                            if (net_gross_loss > 0 and costs_modelled) else None),
     }
 
 
@@ -170,7 +227,21 @@ def compute_performance(signals: list[dict], cfg, now_ms: int,
     base.update({"maxWinningStreak": max_w, "maxLosingStreak": max_l})
     r_chrono = [s.get("rMultiple") for s in resolved if s.get("rMultiple") is not None]
     base["maxDrawdownR"] = _max_drawdown_r(r_chrono) if r_chrono else None
-    base["monteCarlo"] = _monte_carlo(r_chrono)
+
+    # Feed the Monte Carlo the NET series when costs were modelled: a path
+    # built from gross R describes a market with no fees, which is not the
+    # market these signals would have traded in.
+    if base.get("costsModelled"):
+        r_paths = [s.get("rMultipleNet") if s.get("rMultipleNet") is not None
+                   else s.get("rMultiple") for s in resolved]
+        r_paths = [r for r in r_paths if r is not None]
+        basis = "net"
+    else:
+        r_paths, basis = r_chrono, "gross"
+    base["monteCarlo"] = _monte_carlo(r_paths, block=cfg.get("performance.monteCarloBlockLength"))
+    if base["monteCarlo"]:
+        base["monteCarlo"]["basis"] = basis
+        base["monteCarloNet"] = _max_drawdown_r(r_paths) if r_paths else None
 
     # empirical score calibration: historical win rate per quality bucket with
     # Wilson 95% CI -- descriptive statistics, NOT probabilities of future wins
@@ -202,8 +273,10 @@ def compute_performance(signals: list[dict], cfg, now_ms: int,
     base["generatedAt"] = now_ms
     base["disclaimer"] = (
         "Win rate = wins / (wins + losses); waiting/expired/ambiguous/cancelled "
-        "signals are excluded from the denominator. The confluence score is a "
-        "quality ranking, not a probability. Past performance does not "
-        "guarantee future results."
+        "signals are excluded from the denominator. Gross figures (winRate, "
+        "expectancyR, profitFactor, sharpeR, monteCarlo) EXCLUDE fees and "
+        "funding; the *Net figures include them and are the ones to read. The "
+        "confluence score is a quality ranking, not a probability. Past "
+        "performance does not guarantee future results."
     )
     return base

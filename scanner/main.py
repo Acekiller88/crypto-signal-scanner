@@ -11,6 +11,7 @@ partial, 1 = hard failure.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 import time
@@ -24,7 +25,9 @@ from .analysis import analyze_symbol
 from .signals import generate_signals, ACTIVE_STATUSES
 from .outcomes import update_outcomes
 from .performance import compute_performance
-from .validation import validate_signal, validate_signals_payload, check_immutability
+from .validation import (validate_signal, validate_signals_payload,
+                         check_immutability, restore_immutable)
+from .costs import CostModel
 from .persist import atomic_write_json
 from . import persist
 
@@ -219,7 +222,14 @@ def scan_once(cfg: Config, log: ScanLog, client: MarketDataClient | None = None,
         log.info("no qualifying setups this scan -- zero signals generated")
 
     allow_1m = bool(cfg.get("lifecycle.resolveAmbiguousWith1m", True))
-    merged_previous = update_outcomes(previous_signals, candle_map, now_ms, client, allow_1m)
+    # previous_signals must stay a PRISTINE reference for the immutability
+    # guard below. update_outcomes() mutates the dicts it is given,
+    # so handing it the original list would make check_immutability()
+    # compare every signal with itself and always report success.
+    cost_model = CostModel.from_cfg(cfg)
+    merged_previous = update_outcomes(copy.deepcopy(previous_signals),
+                                      candle_map, now_ms, client, allow_1m,
+                                      costs=cost_model)
 
     # immutability guard: revert any accidental mutation of historical fields
     immutability_errors = check_immutability(previous_signals, merged_previous)
@@ -227,7 +237,10 @@ def scan_once(cfg: Config, log: ScanLog, client: MarketDataClient | None = None,
         log.error(f"immutability violation reverted: {err}")
     if immutability_errors:
         old_by_id = {s["id"]: s for s in previous_signals}
-        merged_previous = [old_by_id.get(s["id"], s) for s in merged_previous]
+        for s in merged_previous:
+            old = old_by_id.get(s["id"])
+            if old is not None:
+                restore_immutable(old, s)
 
     # validate new signals before publishing; invalid ones never reach the dashboard
     published_new: list[dict] = []

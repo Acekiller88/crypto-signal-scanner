@@ -49,8 +49,12 @@ DEFAULTS: dict[str, Any] = {
     "risk": {
         "minRr": 2.5, "preferredRr": 3.0,
         "stopBufferAtrMultiple": 0.5, "triggerBufferAtrMultiple": 0.10,
-        "entryZoneAtrMultiple": 0.5, "maxStopAtrMultiple": 3.0,
+        "entryZoneAtrMultiple": 0.5, "minStopAtrMultiple": 0.15, "maxStopAtrMultiple": 3.0,
         "maxRunupAtrMultiple": 3.0, "minStructureRoomAtrMultiple": 1.0,
+    },
+    "costs": {
+        "enabled": True, "entryFeePct": 0.05, "exitFeePct": 0.05,
+        "useFunding": True, "fundingIntervalMs": 28_800_000, "maxCostR": 0.25,
     },
     "scoring": {
         "minScore": 80, "aPlusThreshold": 90, "aThreshold": 85, "bPlusThreshold": 80,
@@ -61,6 +65,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "lifecycle": {"triggerExpiryCandles": 12, "tradeExpiryCandles": 16, "resolveAmbiguousWith1m": True, "candleMs": 900_000},
     "dedupe": {"symbolCooldownMinutes": 240, "sameDirectionOnly": True, "maxActiveSignalsTotal": 12},
+    "performance": {"monteCarloBlockLength": None},
     "retention": {"marketSnapshots": 288, "logEntries": 200},
 }
 
@@ -118,6 +123,17 @@ class Config:
         risk = self.get("risk", {})
         if risk.get("minRr", 0) <= 0 or risk.get("preferredRr", 0) < risk.get("minRr", 0):
             errors.append("risk.minRr/preferredRr invalid")
+        min_stop = risk.get("minStopAtrMultiple", 0)
+        if min_stop <= 0 or min_stop > risk.get("maxStopAtrMultiple", 0):
+            errors.append("risk.minStopAtrMultiple must be > 0 and <= maxStopAtrMultiple")
+        costs = self.get("costs", {})
+        if costs.get("enabled", True):
+            if costs.get("entryFeePct", -1) < 0 or costs.get("exitFeePct", -1) < 0:
+                errors.append("costs.entryFeePct/exitFeePct must be >= 0")
+            if costs.get("maxCostR", 0) <= 0:
+                errors.append("costs.maxCostR must be > 0")
+            if costs.get("fundingIntervalMs", 0) <= 0:
+                errors.append("costs.fundingIntervalMs must be > 0")
         endpoints = self.get("dataSource.failoverEndpoints", [])
         if not endpoints:
             errors.append("dataSource.failoverEndpoints must not be empty")
