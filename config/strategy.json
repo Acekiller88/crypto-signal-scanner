@@ -20,8 +20,16 @@
         "name": "binance-spot-vision",
         "market": "spot",
         "base": "https://data-api.binance.vision/api/v3"
+      },
+      {
+        "name": "bybit-linear",
+        "market": "futures",
+        "dialect": "bybit",
+        "root": "https://api.bybit.com",
+        "base": "https://api.bybit.com"
       }
     ],
+    "_failoverDoc": "The first three hops are all Binance-owned hostnames: when Binance geo-blocks a runner (HTTP 451) they fail together, which is one source with three spellings rather than redundancy. bybit-linear is a different company on different infrastructure with its own geo policy, translated into the Binance response shape by scanner/market_data.py so nothing downstream changes. Its USDT perpetual universe overlaps Binance's closely but is NOT identical -- the venue that served each scan is recorded in system-status.lastScan.apiStats.endpointUsed, and prices/funding are that venue's, not Binance's.",
     "requestTimeoutSeconds": 12,
     "maxRetries": 3,
     "retryBackoffSeconds": 1.5,

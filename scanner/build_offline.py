@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
+from typing import Optional
 
 from .config import repo_root
 
@@ -26,9 +28,14 @@ def _read_json(path, default):
         return default
 
 
-def build() -> None:
-    fe = repo_root() / "frontend"
-    data = repo_root() / "data"
+def build(frontend_dir: Optional[Path] = None, data_dir: Optional[Path] = None) -> None:
+    """Rebuild dashboard-offline.html with the current data embedded.
+
+    Both directories are injectable so tests (and any caller working on a
+    scratch tree) never write into the checked-out repository.
+    """
+    fe = Path(frontend_dir) if frontend_dir else repo_root() / "frontend"
+    data = Path(data_dir) if data_dir else repo_root() / "data"
     html = (fe / "index.html").read_text(encoding="utf-8")
     css = (fe / "styles.css").read_text(encoding="utf-8")
     js = (fe / "app.js").read_text(encoding="utf-8")

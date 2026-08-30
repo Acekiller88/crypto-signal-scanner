@@ -22,7 +22,7 @@ from .market_data import (MarketDataClient, MarketDataError,
                           drop_incomplete, Candle)
 from .universe import build_universe, symbol_list
 from .analysis import analyze_symbol
-from .signals import generate_signals, ACTIVE_STATUSES
+from .signals import generate_signals, ACTIVE_STATUSES, REJECT_STAGES
 from .outcomes import update_outcomes
 from .performance import compute_performance
 from .validation import (validate_signal, validate_signals_payload,
@@ -30,6 +30,15 @@ from .validation import (validate_signal, validate_signals_payload,
 from .costs import CostModel
 from .persist import atomic_write_json
 from . import persist
+from .build_offline import build as build_offline_html
+from .build_preview import build as build_preview_html
+
+
+# Last status payload produced by scan_once(), exposed for --json-output.
+# Defined at import time: a successful --dry-run returns before the write
+# block that used to be the only place this got assigned, so reading it
+# afterwards raised NameError.
+_STATUS: dict = {}
 
 
 class ScanLog:
@@ -209,11 +218,21 @@ def scan_once(cfg: Config, log: ScanLog, client: MarketDataClient | None = None,
     new_signals, rejects = generate_signals(analyses, cfg, previous_signals, now_ms,
                                             data_source=universe.get("source"),
                                             derivatives=derivatives)
+    # Aggregate by STABLE code (closed set) instead of the formatted detail
+    # string: the old histogram keyed on text containing live float values, so
+    # 200 evaluations produced ~69 unique keys that churned the status file
+    # every scan and could not be compared across scans.
     reject_counts: dict[str, int] = {}
     for r in rejects:
-        reject_counts[r["reason"]] = reject_counts.get(r["reason"], 0) + 1
-    for reason, count in sorted(reject_counts.items(), key=lambda kv: -kv[1]):
-        log.info(f"rejected {count}x: {reason}")
+        code = r.get("code", "unknown")
+        reject_counts[code] = reject_counts.get(code, 0) + 1
+    for code, count in sorted(reject_counts.items(), key=lambda kv: -kv[1]):
+        sample = next((r.get("detail", "") for r in rejects if r.get("code") == code), "")
+        log.info(f"rejected {count}x {code} (e.g. {sample})")
+    # The funnel is the diagnostic that matters: it shows which gate is
+    # actually starving the system, in evaluation order.
+    funnel = [{"stage": stage, "rejected": reject_counts[stage]}
+              for stage in REJECT_STAGES if reject_counts.get(stage)]
     for sig in new_signals:
         log.info(f"SIGNAL {sig['symbol']} {sig['direction']} {sig['quality']} "
                  f"score={sig['score']} trigger={sig['triggerPrice']} "
@@ -288,9 +307,16 @@ def scan_once(cfg: Config, log: ScanLog, client: MarketDataClient | None = None,
             "symbolsValid": len(analyses),
             "dataFailures": len(failed_symbols),
             "failedSymbols": failed_symbols[:25],
-            "candidates": len(new_signals) + sum(1 for r in rejects if "risk model" in r["reason"] or "score" in r["reason"]),
+            # A "candidate" is a setup that survived every structural gate and
+            # reached the risk/scoring stage -- the only rejects that prove the
+            # pipeline got that far.
+            "candidates": len(new_signals) + sum(
+                1 for r in rejects
+                if r.get("code") in ("risk_model_rejected", "entry_blocked_by_structure",
+                                     "score_below_threshold", "rr_below_min")),
             "signalsGenerated": len(published_new),
             "rejects": reject_counts,
+            "rejectFunnel": funnel,
             "apiStats": stats,
             "apiHealth": api_health,
             "dataFreshness": freshness,
@@ -338,6 +364,9 @@ def scan_once(cfg: Config, log: ScanLog, client: MarketDataClient | None = None,
              "message": f"{fmt_clock_badge(now_ms)} MYT · {health}",
              "color": "green" if health == "HEALTHY" else ("orange" if health == "DEGRADED" else "red")}
 
+    global _STATUS
+    _STATUS = status
+
     if dry_run:
         log.info("dry run -- no files written")
         return 0
@@ -348,11 +377,29 @@ def scan_once(cfg: Config, log: ScanLog, client: MarketDataClient | None = None,
     persist.write_data_file("market-snapshots.json", snapshots)
     persist.write_data_file("universe-snapshot.json", screener_payload)  # overwritten each scan
     atomic_write_json(persist.frontend_data_dir() / "badge.json", badge)
+
+    # Self-contained dashboards. README/§5 and build_offline's own docstring
+    # claim these are "rebuilt automatically on every scan" -- until now
+    # nothing called them, so the committed copies drifted from the data.
+    # A rebuild failure must never fail a scan that already wrote good data.
+    # Paths come from persist so a monkeypatched (test/scratch) data root is
+    # honoured instead of the real checkout.
+    frontend_dir = persist.frontend_data_dir().parent
+    builders = (
+        ("dashboard-offline.html",
+         lambda: build_offline_html(frontend_dir=frontend_dir, data_dir=persist.data_dir())),
+        ("preview.html",
+         lambda: build_preview_html(frontend_dir=frontend_dir)),
+    )
+    for name, builder in builders:
+        try:
+            builder()
+        except Exception as exc:  # noqa: BLE001 - cosmetic artefact, never fatal
+            log.warn(f"{name} rebuild skipped: {exc}")
+
     log.info(f"SCAN COMPLETE {len(scan_symbols)} symbols scanned, {len(analyses)} valid, "
              f"{len(failed_symbols)} data failures, {len(published_new)} signals generated "
              f"({duration_ms} ms)")
-    global _STATUS
-    _STATUS = status
     return 0
 
 

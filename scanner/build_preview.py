@@ -10,12 +10,19 @@ deployed artifact for Cloudflare Pages; this is regenerated on every scan.
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from typing import Optional
 
 from .config import repo_root
 
 
-def build() -> None:
-    fe = repo_root() / "frontend"
+def build(frontend_dir: Optional[Path] = None) -> None:
+    """Rebuild preview.html.
+
+    ``frontend_dir`` is injectable so tests (and any caller working on a
+    scratch tree) never write into the checked-out repository.
+    """
+    fe = Path(frontend_dir) if frontend_dir else repo_root() / "frontend"
     html = (fe / "index.html").read_text(encoding="utf-8")
     css = (fe / "styles.css").read_text(encoding="utf-8")
     js = (fe / "app.js").read_text(encoding="utf-8")

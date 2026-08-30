@@ -68,13 +68,16 @@ def score_setup(direction: str, parts: dict, rr: Optional[float], cfg: Config_li
     struct = min(struct, w.get("marketStructure", 20))
 
     # ---------------- liquidity / SMC (20)
+    # An imbalance price has already traded back into has been partly consumed;
+    # it is weaker evidence than an untouched one and must not score the same.
+    # Fully-invalidated zones never reach here (signals.py drops them).
     liq = 0.0
     if parts.get("sweep"):
         liq += 10
     if parts.get("fvg"):
-        liq += 5
+        liq += 5 if parts.get("fvgFresh", True) else 2.5
     if parts.get("orderBlock"):
-        liq += 5
+        liq += 5 if parts.get("orderBlockFresh", True) else 2.5
     liq = min(liq, w.get("liquiditySmc", 20))
 
     # ---------------- momentum (15)

@@ -127,22 +127,55 @@ function renderAll() {
   renderScreener();
   renderActive();
   renderRecent();
+  renderFunnel();
   renderPerformance();
   renderHistory();
   renderLogs();
   $("ft-version").textContent = state.status?.version ? `engine v${state.status.version}` : "";
 }
 
+/* Health as reported by the last scan is a statement about THAT scan, not
+ * about now. If the scheduler stopped (GitHub cron skips runs, a workflow got
+ * disabled, the repo went quiet) the last scan can say HEALTHY forever while
+ * the page shows hours-old prices. Age is measured in the browser against
+ * wall-clock time and always overrides the stored health. */
+const STALE_AFTER_MS = 45 * 60_000;    // 3 missed 15-minute scans
+const OFFLINE_AFTER_MS = 3 * 3600_000; // no successful scan for 3 hours
+
+function dataAgeMs() {
+  const st = state.status;
+  const last = st?.lastScan?.executedAt ?? st?.lastSuccessfulScan;
+  return last ? Math.max(0, Date.now() - last) : null;
+}
+
+/** Effective health = stored health downgraded by how old the data actually is. */
+function effectiveHealth() {
+  const stored = state.status?.health ?? "UNKNOWN";
+  const age = dataAgeMs();
+  if (age == null) return { level: stored, age, stale: false };
+  if (age >= OFFLINE_AFTER_MS) return { level: "OFFLINE", age, stale: true };
+  if (age >= STALE_AFTER_MS) return { level: "STALE", age, stale: true };
+  return { level: stored, age, stale: false };
+}
+
 function renderTopChips() {
   const st = state.status;
-  const health = st?.health ?? "UNKNOWN";
+  const { level: health, age, stale } = effectiveHealth();
   const chip = $("chip-health");
-  chip.textContent = health === "HEALTHY" ? "SYSTEM ONLINE" :
-    health === "DEGRADED" ? "DEGRADED" : health === "FAILED" ? "SYSTEM OFFLINE" : "…";
+  chip.textContent =
+    health === "HEALTHY" ? "SYSTEM ONLINE" :
+    health === "DEGRADED" ? "DEGRADED" :
+    health === "STALE" ? "DATA STALE" :
+    health === "OFFLINE" ? "SCANNER OFFLINE" :
+    health === "FAILED" ? "SYSTEM OFFLINE" : "…";
   chip.className = "chip " + (health === "HEALTHY" ? "chip-ok" :
-    health === "DEGRADED" ? "chip-warn" : "chip-bad");
+    (health === "DEGRADED" || health === "STALE") ? "chip-warn" : "chip-bad");
   const last = st?.lastScan?.executedAt;
-  $("chip-lastscan").textContent = `last scan ${last ? fmtClock(last) + " MYT" : "—"}`;
+  // Always show how old the data is, not just when the scan happened -- a
+  // bare timestamp reads as "current" to anyone who does not check the date.
+  $("chip-lastscan").textContent = last
+    ? `last scan ${fmtClock(last)} MYT · ${fmtAgo(last)}`
+    : "last scan —";
   const next = st?.nextExpectedScanAt;
   $("chip-nextscan").textContent = next ? `next ~${fmtClock(next)} MYT` : "next —";
   const pm = $("chip-price-mode");
@@ -158,21 +191,35 @@ function renderTopChips() {
     : "Last data update: —";
 
   const notice = $("health-notice");
-  if (health === "FAILED") {
+  const ageTxt = age != null ? fmtDur(age) : "unknown";
+  if (health === "OFFLINE") {
+    notice.textContent = `⛔ No successful scan for ${ageTxt}. The scheduler appears to be stopped — ` +
+      `everything below is a historical snapshot, NOT the current market. Do not act on these levels.`;
+    notice.classList.remove("hidden");
+  } else if (health === "STALE") {
+    notice.textContent = `⚠ Data is ${ageTxt} old (scans are expected every 15 min). ` +
+      `Scheduled runs were delayed or skipped — treat prices and signals as out of date.`;
+    notice.classList.remove("hidden");
+  } else if (health === "FAILED") {
     notice.textContent = "⚠ Last scan FAILED — API unreachable. Showing the last successful scan data. No simulated data is ever shown.";
     notice.classList.remove("hidden");
   } else if (health === "DEGRADED") {
     notice.textContent = "⚠ Last scan completed with degraded data quality (some symbols failed or data delayed).";
     notice.classList.remove("hidden");
   } else notice.classList.add("hidden");
+  document.body.classList.toggle("data-stale", stale);
 }
 
 function renderStatus() {
   const st = state.status; if (!st) return;
   const ls = st.lastScan || {};
-  $("st-system").textContent = st.health ?? "—";
-  $("st-health-sub").textContent = ls.status ? `scan ${ls.status}` : "—";
-  $("st-lastscan").textContent = ls.executedAt ? fmtClock(ls.executedAt) : "—";
+  const eff = effectiveHealth();
+  $("st-system").textContent = eff.level;
+  $("st-health-sub").textContent = eff.stale
+    ? `data ${fmtDur(eff.age)} old · scan reported ${st.health ?? "—"}`
+    : (ls.status ? `scan ${ls.status}` : "—");
+  $("st-lastscan").textContent = ls.executedAt
+    ? `${fmtClock(ls.executedAt)} (${fmtAgo(ls.executedAt)})` : "—";
   $("st-jitter").textContent = ls.jitterSeconds != null ? `scheduled ${fmtClock(ls.scheduledAt)} · jitter ${ls.jitterSeconds}s` : "—";
   $("st-nextscan").textContent = st.nextExpectedScanAt ? fmtClock(st.nextExpectedScanAt) : "—";
   $("st-duration").textContent = ls.durationMs != null ? (ls.durationMs / 1000).toFixed(1) + "s" : "—";
@@ -639,6 +686,69 @@ $("csv-export").addEventListener("click", () => {
   a.click();
   URL.revokeObjectURL(a.href);
 });
+
+
+/* Rejection funnel: turns "0 signals" from an unexplained silence into an
+ * auditable chain. Reads the stable stage codes the engine now emits. */
+const FUNNEL_LABELS = {
+  data_incomplete: "Data incomplete",
+  htf_conflict: "4H + 1H directly oppose",
+  htf_not_aligned: "Higher timeframes not aligned",
+  bias1d_conflict: "1D bias conflicts",
+  regime_ranging: "4H regime is RANGING",
+  volatility_out_of_band: "ATR% outside band",
+  momentum_adx_low: "ADX too low (no emerging trend)",
+  momentum_rsi_out_of_band: "RSI outside band",
+  volume_thin: "Relative volume below minimum",
+  no_liquidity_sweep: "No liquidity sweep in window",
+  no_structure_event: "No CHoCH/BOS after the sweep",
+  no_displacement: "No displacement after structure",
+  no_fvg_or_order_block: "No FVG and no order block",
+  late_entry: "Late entry (price already ran)",
+  risk_model_rejected: "Risk model rejected (SL/TP/RR/cost)",
+  entry_blocked_by_structure: "Entry too close to opposing structure",
+  funding_extreme: "Funding extreme (crowd positioned)",
+  score_below_threshold: "Confluence score below threshold",
+  rr_below_min: "Risk/reward below minimum",
+  duplicate_active: "Duplicate of an active signal",
+  symbol_cooldown: "Symbol in cooldown",
+  duplicate_setup_hash: "Identical setup already seen",
+  max_active_signals: "Active-signal cap reached",
+};
+
+function renderFunnel() {
+  const card = $("funnel-card");
+  if (!card) return;
+  const ls = state.status?.lastScan || {};
+  const funnel = ls.rejectFunnel;
+  const tbody = card.querySelector("tbody");
+  tbody.innerHTML = "";
+
+  if (!Array.isArray(funnel) || !funnel.length) {
+    card.classList.add("hidden");
+    return;
+  }
+  card.classList.remove("hidden");
+
+  // Evaluations = symbols x both directions; each rejection consumes one.
+  const evaluated = (ls.symbolsValid ?? 0) * 2;
+  const total = funnel.reduce((a, r) => a + (r.rejected || 0), 0);
+  $("funnel-intro").textContent =
+    `${evaluated || total} direction-evaluations across ${ls.symbolsValid ?? 0} symbols · ` +
+    `${total} rejected · ${ls.signalsGenerated ?? 0} published`;
+
+  let remaining = evaluated || total;
+  for (const row of funnel) {
+    remaining -= row.rejected || 0;
+    const tr = document.createElement("tr");
+    const label = FUNNEL_LABELS[row.stage] || row.stage;
+    tr.innerHTML =
+      `<td>${label}</td>` +
+      `<td class="num">${row.rejected}</td>` +
+      `<td class="num">${Math.max(0, remaining)}</td>`;
+    tbody.appendChild(tr);
+  }
+}
 
 /* --------------------------------------------------- boot */
 refreshData();

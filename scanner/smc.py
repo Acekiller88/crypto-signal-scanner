@@ -39,9 +39,22 @@ class FVG:
     top: float
     size: float
     midpoint: float
+    # Index of the first later candle that traded back into the gap (price
+    # returned to fill the imbalance), or None while the gap is untouched.
+    # A filled gap is spent liquidity: it must not score like a fresh one.
+    mitigatedIndex: Optional[int] = None
+    # Index of the first later candle that traded fully through the gap.
+    invalidatedIndex: Optional[int] = None
 
     def contains(self, price: float) -> bool:
         return self.bottom <= price <= self.top
+
+    def is_fresh(self, at_index: Optional[int] = None) -> bool:
+        """True when the gap has not been touched (as of ``at_index``)."""
+        for marker in (self.mitigatedIndex, self.invalidatedIndex):
+            if marker is not None and (at_index is None or marker <= at_index):
+                return False
+        return True
 
 
 def find_fvgs(opens: list[float], highs: list[float], lows: list[float],
@@ -62,7 +75,31 @@ def find_fvgs(opens: list[float], highs: list[float], lows: list[float],
             gap = lows[i - 2] - highs[i]
             if gap >= min_gap_atr * atr_v:
                 out.append(FVG(i, "bearish", highs[i], lows[i - 2], gap, (highs[i] + lows[i - 2]) / 2.0))
+    _mark_fvg_mitigation(out, highs, lows)
     return out
+
+
+def _mark_fvg_mitigation(gaps: list[FVG], highs: list[float], lows: list[float]) -> None:
+    """Record when each gap was first traded back into, and when fully filled.
+
+    Causal by construction: only candles AFTER the gap's own index are
+    inspected, and the recorded marker is the index of the candle that did it,
+    so a consumer evaluating bar N can ask "was this mitigated by N?" without
+    seeing anything later.
+    """
+    n = len(highs)
+    for gap in gaps:
+        for j in range(gap.index + 1, n):
+            touched = not (lows[j] > gap.top or highs[j] < gap.bottom)
+            if touched and gap.mitigatedIndex is None:
+                gap.mitigatedIndex = j
+            # fully traded through: the whole imbalance has been rebalanced
+            if gap.direction == "bullish" and lows[j] <= gap.bottom:
+                gap.invalidatedIndex = j
+                break
+            if gap.direction == "bearish" and highs[j] >= gap.top:
+                gap.invalidatedIndex = j
+                break
 
 
 @dataclass
@@ -73,9 +110,22 @@ class OrderBlock:
     top: float
     displacementIndex: int
     bosIndex: int
+    # First candle after the displacement that traded back into the zone
+    # (tested), and the first that closed beyond it (broken). An order block
+    # price has already revisited or invalidated is not the same evidence as
+    # an untested one.
+    mitigatedIndex: Optional[int] = None
+    invalidatedIndex: Optional[int] = None
 
     def contains(self, price: float) -> bool:
         return self.bottom <= price <= self.top
+
+    def is_fresh(self, at_index: Optional[int] = None) -> bool:
+        """True when the zone is untested and unbroken (as of ``at_index``)."""
+        for marker in (self.mitigatedIndex, self.invalidatedIndex):
+            if marker is not None and (at_index is None or marker <= at_index):
+                return False
+        return True
 
 
 def find_order_blocks(opens: list[float], highs: list[float], lows: list[float],
@@ -107,4 +157,28 @@ def find_order_blocks(opens: list[float], highs: list[float], lows: list[float],
         if ob.index not in seen:
             seen.add(ob.index)
             unique.append(ob)
+    _mark_ob_mitigation(unique, highs, lows, closes)
     return unique
+
+
+def _mark_ob_mitigation(blocks: list[OrderBlock], highs: list[float],
+                        lows: list[float], closes: list[float]) -> None:
+    """Record when each order block was first retested and when it broke.
+
+    Only candles after the *displacement* are considered: the origin candle and
+    the displacement itself necessarily overlap the zone, and counting those
+    would mark every block mitigated at birth.
+    """
+    n = len(highs)
+    for ob in blocks:
+        for j in range(ob.displacementIndex + 1, n):
+            touched = not (lows[j] > ob.top or highs[j] < ob.bottom)
+            if touched and ob.mitigatedIndex is None:
+                ob.mitigatedIndex = j
+            # closing beyond the zone against its direction breaks it
+            if ob.direction == "bullish" and closes[j] < ob.bottom:
+                ob.invalidatedIndex = j
+                break
+            if ob.direction == "bearish" and closes[j] > ob.top:
+                ob.invalidatedIndex = j
+                break
